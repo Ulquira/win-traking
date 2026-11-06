@@ -1,0 +1,53 @@
+{
+  "name": "traking-win",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host",
+    "api": "tsx watch server/index.ts",
+    "capa": "tsx watch capa_intermedia/index.ts",
+    "dev:full": "concurrently \"npm run dev\" \"npm run api\" \"npm run capa\"",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@googlemaps/js-api-loader": "^2.1.1",
+    "@radix-ui/react-slot": "^1.2.4",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "cors": "^2.8.6",
+    "date-fns": "^4.1.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.6.2",
+    "firebase": "^12.14.0",
+    "framer-motion": "^12.38.0",
+    "helmet": "^8.3.0",
+    "lucide-react": "^1.14.0",
+    "mysql2": "^3.22.3",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "react-icons": "^5.7.0",
+    "react-router-dom": "^7.15.0",
+    "tailwind-merge": "^3.5.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/google.maps": "^3.66.2",
+    "@types/node": "^25.6.1",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "autoprefixer": "^10.5.0",
+    "concurrently": "^10.0.6",
+    "nodemon": "^3.1.14",
+    "postcss": "^8.5.14",
+    "tailwindcss": "^3.4.19",
+    "tsx": "^4.22.3",
+    "typescript": "^5.9.3",
+    "vite": "^8.0.11"
+  }
+}

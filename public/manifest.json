@@ -1,0 +1,23 @@
+{
+  "name": "WIN Seguimiento",
+  "short_name": "GoWIN",
+  "description": "Seguimiento en tiempo real de tu instalación WIN",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F3F4F6",
+  "theme_color": "#FF5A0A",
+  "icons": [
+    {
+      "src": "/win-icon.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/win-icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
