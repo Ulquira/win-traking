@@ -21,8 +21,9 @@ jobs:
         with:
           node-version: '22.x'
 
-      - name: Zip source files
+      - name: Prepare backend package.json and zip source files
         run: |
+          npm pkg delete scripts.build
           zip -r release.zip package.json package-lock.json tsconfig*.json server capa_intermedia -q
 
       - name: Login to Azure
