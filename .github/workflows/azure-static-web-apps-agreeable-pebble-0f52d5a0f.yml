@@ -31,7 +31,7 @@ jobs:
           api_location: ""
           output_location: "dist"
         env:
-          VITE_API_URL: "https://trakingwin-api-eus.azurewebsites.net"
+          VITE_API_URL: "https://trakingwin-api-eus-ffdahgfvcje8babp.eastus-01.azurewebsites.net"
           VITE_GOOGLE_MAPS_API_KEY: "AIzaSyA9aYa76-YBAGlanLejHQ55ipqUxX4vkd8"
           VITE_API_TOKEN: "LLAVE_SECRETA_DEL_TERCERO_123"
           VITE_FIREBASE_API_KEY: "AIzaSyAXszU1L5M-1H73V94vwWvoMQ7buzsAOkc"
