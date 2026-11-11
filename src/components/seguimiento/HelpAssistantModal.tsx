@@ -1,460 +1,1270 @@
 import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, Send, Headset, CheckCircle2, RotateCcw, CalendarDays } from "lucide-react";
+import {
+    X,
+    RotateCcw,
+    Send,
+    CheckCircle2,
+    MessageCircle,
+    Sparkles,
+    CalendarDays,
+    Navigation,
+    ChevronRight,
+    ShieldCheck
+} from "lucide-react";
 import { InstalacionData } from "@/types/tracking";
-import { API_BASE_URL } from "@/config/api";
+import {
+    parsePlanData,
+    formatAddress,
+    toTitleCase,
+    formatTramoToRange
+} from "@/utils/trackingFormatters";
 import { trackEvent } from "@/lib/firebaseConfig";
-
-interface ChatMessage {
-  sender: "bot" | "user" | "agent";
-  author?: string;
-  text: string;
-  timestamp: string;
-}
+import { API_BASE_URL } from "@/config/api";
 
 interface HelpAssistantModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  token?: string;
-  data: InstalacionData | null;
-  onOpenReprogram: () => void;
+    isOpen: boolean;
+    onClose: () => void;
+    token?: string;
+    data: InstalacionData;
+    onOpenReprogram: () => void;
+    onCancelVisitSuccess?: () => void;
 }
 
-type BotStep = "inicio" | "demora" | "horario" | "tecnico" | "live_chat" | "resuelto";
+type AreaOperativa = 'Visita Técnica' | 'Instalaciones';
+type ConsultaField = 'telefono' | 'titular' | 'direccion' | 'estado_datos';
+
+type FlowStep =
+    | 'step1_area'
+    | 'menu_visita_tecnica'
+    | 'menu_instalaciones'
+    // Exclusivos Visita Técnica
+    | 'vt_ya_no_necesito'
+    | 'vt_input_otro_motivo'
+    | 'vt_sin_disponibilidad'
+    | 'vt_dir_step1_distrito'
+    | 'vt_dir_step2_direccion'
+    | 'vt_dir_step3_gps'
+    // Compartido: Problema con un técnico
+    | 'mod_problema_tecnico'
+    | 'mod_input_otro_problema'
+    // Consulta BD (Instalaciones / Visita Técnica)
+    | 'mod_realizar_consulta'
+    | 'mod_validar_consulta'
+    // Compartido: Hablar con un asesor
+    | 'mod_hablar_asesor'
+    | 'mod_input_otro_asesor'
+    // Chat en Vivo con Asesor
+    | 'live_chat'
+    // Cierre
+    | 'end_flow';
+
+interface ChatBubble {
+    id: string;
+    sender: 'bot' | 'user' | 'agent';
+    text: string;
+    badge?: string;
+    fecha_utc?: string;
+}
 
 export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
-  isOpen,
-  onClose,
-  token,
-  data,
-  onOpenReprogram,
+    isOpen,
+    onClose,
+    token,
+    data,
+    onOpenReprogram,
+    onCancelVisitSuccess
 }) => {
-  const [chatId, setChatId] = useState<number | null>(null);
-  const [step, setStep] = useState<BotStep>("inicio");
-  const [motivo, setMotivo] = useState<string>("");
-  const [estadoChat, setEstadoChat] = useState<string>("iniciado");
-  const [asesorNombre, setAsesorNombre] = useState<string | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [inputText, setInputText] = useState("");
-  const [isSending, setIsSending] = useState(false);
+    const [chatId, setChatId] = useState<number | null>(null);
+    const [step, setStep] = useState<FlowStep>('step1_area');
+    const [area, setArea] = useState<AreaOperativa | null>(null);
+    const [messages, setMessages] = useState<ChatBubble[]>([]);
+    const [inputText, setInputText] = useState('');
+    const [asesorNombre, setAsesorNombre] = useState<string | null>(null);
+    const [isSendingLive, setIsSendingLive] = useState(false);
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const nombreCliente = data?.cliente_nombre?.split(" ")[0] || "Cliente";
-  const isVt = data?.tipo === "ticket";
-  const canReprogram = isVt && (data?.status === "programada" || data?.status === "asignado");
+    // Estados temporales para Dirección Incorrecta (Secuencial 1 -> 2 -> 3)
+    const [distritoTemp, setDistritoTemp] = useState('');
+    const [direccionTemp, setDireccionTemp] = useState('');
+    const [isGettingGps, setIsGettingGps] = useState(false);
 
-  // Auto-scroll al último mensaje
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, step]);
+    // Estado temporal para Consulta BD con validación previa
+    const [pendingQuery, setPendingQuery] = useState<{ field: ConsultaField; label: string } | null>(null);
+    const [motivoActual, setMotivoActual] = useState<string>('Iniciado');
 
-  // Restaurar o inicializar sesión al abrir el modal
-  useEffect(() => {
-    if (!isOpen || !token) return;
+    const chatEndRef = useRef<HTMLDivElement>(null);
 
-    const savedChatId = sessionStorage.getItem(`win_chat_id_${token}`);
-    if (savedChatId && messages.length === 0) {
-      const parsedId = Number(savedChatId);
-      setChatId(parsedId);
-      fetch(`${API_BASE_URL}/api/chat-log/${parsedId}?token=${encodeURIComponent(token)}`)
-        .then((r) => r.json())
-        .then((res) => {
-          if (res.success && res.data) {
-            setMessages(res.data.mensajes || []);
-            setEstadoChat(res.data.estado_chat);
-            setAsesorNombre(res.data.asesor_nombre || null);
-            if (res.data.estado_chat === "esperando_asesor" || res.data.estado_chat === "en_atencion") {
-              setStep("live_chat");
-            } else if (res.data.estado_chat === "resuelto") {
-              setStep("resuelto");
-            }
-          } else {
-            initBotGreeting();
-          }
-        })
-        .catch(() => initBotGreeting());
-    } else if (messages.length === 0) {
-      initBotGreeting();
-    }
-  }, [isOpen, token]);
+    const firstName = data.cliente_nombre
+        ? toTitleCase(data.cliente_nombre.split(' ')[0])
+        : 'Cliente';
 
-  // Polling cada 3 segundos cuando está en modo Live Chat
-  useEffect(() => {
-    if (!isOpen || !chatId || !token) return;
-    if (step !== "live_chat" && estadoChat !== "esperando_asesor" && estadoChat !== "en_atencion") return;
+    const expectedPin = data.pin_token
+        ? String(data.pin_token).trim()
+        : data.token_inicio
+            ? String(data.token_inicio).replace(/\D/g, '').slice(0, 4)
+            : null;
 
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`${API_BASE_URL}/api/chat-log/${chatId}?token=${encodeURIComponent(token)}`);
-        const json = await res.json();
-        if (json.success && json.data) {
-          setEstadoChat(json.data.estado_chat);
-          if (json.data.asesor_nombre) setAsesorNombre(json.data.asesor_nombre);
-          if (Array.isArray(json.data.mensajes) && json.data.mensajes.length >= messages.length) {
-            setMessages(json.data.mensajes);
-          }
-          if (json.data.estado_chat === "resuelto") {
-            setStep("resuelto");
-          }
+    // Detectar automáticamente el área según el tipo de servicio de la orden
+    const detectServiceArea = (): AreaOperativa => {
+        const tipoLower = (data.tipo || '').toLowerCase().trim();
+        const srvUpper = (data.tipo_servicio || '').toUpperCase().trim();
+        const prodUpper = (data.producto || '').toUpperCase().trim();
+        const trabUpper = (data.tipo_trabajo || '').toUpperCase().trim();
+
+        const isVisitaTecnica =
+            tipoLower === 'ticket' ||
+            tipoLower === 'postventa' ||
+            srvUpper.includes('AVERIA') ||
+            srvUpper.includes('POSTVENTA') ||
+            prodUpper.includes('AVERIA') ||
+            prodUpper.includes('POSTVENTA') ||
+            prodUpper.includes('MOTO') ||
+            (trabUpper !== '' && !trabUpper.includes('INSTALA'));
+
+        return isVisitaTecnica ? 'Visita Técnica' : 'Instalaciones';
+    };
+
+    const mapDbMessagesToBubbles = (rawList: any[]): ChatBubble[] => {
+        return rawList.map((m: any, idx: number) => {
+            const rol = (m.rol || m.sender || '').toLowerCase();
+            const isUser = rol === 'cliente' || rol === 'user' || m.emisor === 'CLIENTE';
+            const isAgent = rol === 'asesor' || rol === 'agent' || m.emisor === 'ASESOR_WIN';
+
+            return {
+                id: `msg-${idx}-${m.fecha_utc || m.timestamp || idx}`,
+                sender: isUser ? 'user' : isAgent ? 'agent' : 'bot',
+                text: m.texto || m.text || '',
+                badge: isUser
+                    ? undefined
+                    : isAgent
+                        ? (m.autor || m.author || asesorNombre || 'Asesor WIN')
+                        : 'Asistente WIN',
+                fecha_utc: m.fecha_utc || m.timestamp
+            };
+        });
+    };
+
+    const initConversation = (forceReset = false) => {
+        if (forceReset && token) {
+            sessionStorage.removeItem(`win_chat_id_${token}`);
+            setChatId(null);
         }
-      } catch (err) {
-        console.error("Error en polling de chat:", err);
-      }
-    }, 3000);
 
-    return () => clearInterval(interval);
-  }, [isOpen, chatId, token, step, estadoChat, messages.length]);
-
-  const syncChatLog = async (
-    nextMessages: ChatMessage[],
-    nextEstado: string,
-    nextMotivo?: string,
-    ultimoPor: "cliente" | "bot" = "cliente"
-  ) => {
-    if (!token) return;
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/chat-log`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: chatId,
-          token,
-          orden_id: data?.idoperacion || null,
-          codisegui: data?.codisegui || null,
-          phone: data?.cliente_telefono || null,
-          grupo_servicio: data?.tipo_servicio || data?.tipo || null,
-          motivo: nextMotivo || motivo || null,
-          estado_chat: nextEstado,
-          ultimo_mensaje_por: ultimoPor,
-          mensajes: nextMessages,
-        }),
-      });
-      const json = await res.json();
-      if (json.success && json.id && !chatId) {
-        setChatId(json.id);
-        sessionStorage.setItem(`win_chat_id_${token}`, String(json.id));
-      }
-    } catch (e) {
-      console.error("Error sincronizando chat:", e);
-    }
-  };
-
-  const initBotGreeting = () => {
-    const initialMsg: ChatMessage = {
-      sender: "bot",
-      text: `Hola ${nombreCliente}, soy tu asistente virtual de WIN. ¿En qué te puedo ayudar hoy con tu visita?`,
-      timestamp: new Date().toISOString(),
-    };
-    setMessages([initialMsg]);
-    setStep("inicio");
-    setEstadoChat("iniciado");
-    syncChatLog([initialMsg], "iniciado", undefined, "bot");
-  };
-
-  const handleSelectOption = (selectedStep: BotStep, labelText: string, motivoKey: string) => {
-    const userMsg: ChatMessage = {
-      sender: "user",
-      text: labelText,
-      timestamp: new Date().toISOString(),
+        const detectedArea = detectServiceArea();
+        setArea(detectedArea);
+        setStep(detectedArea === 'Visita Técnica' ? 'menu_visita_tecnica' : 'menu_instalaciones');
+        setInputText('');
+        setDistritoTemp('');
+        setDireccionTemp('');
+        setPendingQuery(null);
+        setAsesorNombre(null);
+        setMessages([
+            {
+                id: 'welcome-1',
+                sender: 'bot',
+                badge: 'Asistente WIN',
+                text:
+                    detectedArea === 'Visita Técnica'
+                        ? `¡Hola ${firstName}! 👋 Soy tu Asistente Virtual de WIN. ¿En qué podemos ayudarte hoy con tu **Visita Técnica**?`
+                        : `¡Hola ${firstName}! 👋 Soy tu Asistente Virtual de WIN. ¿En qué podemos ayudarte hoy con tu **Instalación**?`,
+                fecha_utc: new Date().toISOString()
+            }
+        ]);
     };
 
-    let botReplyText = "";
-    if (selectedStep === "demora") {
-      botReplyText =
-        data?.status === "en_camino"
-          ? `Tu técnico ya se encuentra en ruta hacia tu domicilio. El tiempo estimado de llegada es ${data?.eta || "en breves minutos"}.`
-          : `Tu atención está programada para el rango ${data?.tramo || "seleccionado"}. El técnico se pondrá en contacto apenas inicie su ruta.`;
-    } else if (selectedStep === "horario") {
-      botReplyText = canReprogram
-        ? "Puedes elegir una nueva fecha y rango horario directamente desde aquí o solicitar ayuda de un asesor."
-        : "Para modificar el horario de esta orden, te podemos comunicar en línea con un asesor.";
-    } else if (selectedStep === "tecnico") {
-      botReplyText = data?.tecnico?.nombre
-        ? `Tu técnico asignado es ${data.tecnico.nombre}. Recuerda solicitarle tu código de validación al llegar.`
-        : "Estamos asignando a la cuadrilla más cercana a tu zona. Te notificaremos apenas esté en ruta.";
-    }
+    useEffect(() => {
+        if (!isOpen) return;
 
-    const botMsg: ChatMessage = {
-      sender: "bot",
-      text: botReplyText,
-      timestamp: new Date().toISOString(),
+        const savedId = token ? sessionStorage.getItem(`win_chat_id_${token}`) : null;
+        if (savedId && token) {
+            const numId = Number(savedId);
+            setChatId(numId);
+            fetch(`${API_BASE_URL}/api/chat-log/${numId}?token=${encodeURIComponent(token)}`)
+                .then(r => r.json())
+                .then(res => {
+                    if (res.success && res.data) {
+                        const dbEstado = (res.data.estado_chat || '').toLowerCase();
+                        if (res.data.asesor_nombre) setAsesorNombre(res.data.asesor_nombre);
+                        if (Array.isArray(res.data.mensajes) && res.data.mensajes.length > 0) {
+                            setMessages(mapDbMessagesToBubbles(res.data.mensajes));
+                        }
+                        if (dbEstado === 'esperando_asesor' || dbEstado === 'en_atencion' || dbEstado === 'derivado a asesor') {
+                            setStep('live_chat');
+                            return;
+                        }
+                    }
+                    if (messages.length === 0) initConversation();
+                })
+                .catch(() => {
+                    if (messages.length === 0) initConversation();
+                });
+        } else if (messages.length === 0) {
+            initConversation();
+        }
+    }, [isOpen]);
+
+    // Polling cada 3 segundos solo cuando está en modo Live Chat con asesor
+    useEffect(() => {
+        if (!isOpen || step !== 'live_chat' || !chatId || !token) return;
+
+        const interval = setInterval(async () => {
+            try {
+                const res = await fetch(`${API_BASE_URL}/api/chat-log/${chatId}?token=${encodeURIComponent(token)}`);
+                const json = await res.json();
+                if (json.success && json.data) {
+                    if (json.data.asesor_nombre) {
+                        setAsesorNombre(json.data.asesor_nombre);
+                    }
+                    if (Array.isArray(json.data.mensajes) && json.data.mensajes.length > 0) {
+                        setMessages(mapDbMessagesToBubbles(json.data.mensajes));
+                    }
+                    const dbEstado = (json.data.estado_chat || '').toLowerCase();
+                    if (dbEstado === 'resuelto' || dbEstado === 'finalizado') {
+                        setStep('end_flow');
+                    }
+                }
+            } catch (err) {
+                console.error('Error polling live chat:', err);
+            }
+        }, 3000);
+
+        return () => clearInterval(interval);
+    }, [isOpen, step, chatId, token, asesorNombre]);
+
+    useEffect(() => {
+        chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [messages, step]);
+
+    const saveChatLog = async (
+        updatedMessages: ChatBubble[],
+        motivo: string,
+        nextStep: FlowStep,
+        isLiveChatRequest = false
+    ) => {
+        if (!token) return;
+
+        const mensajesFormateados = updatedMessages.map((m, idx) => ({
+            orden: idx + 1,
+            fecha_utc: m.fecha_utc || new Date().toISOString(),
+            emisor: m.sender === 'user' ? 'CLIENTE' : m.sender === 'agent' ? 'ASESOR_WIN' : 'ASISTENTE_WIN',
+            rol: m.sender === 'user' ? 'cliente' : m.sender === 'agent' ? 'asesor' : 'bot',
+            autor: m.badge || undefined,
+            tipo: 'text',
+            texto: m.text.replace(/\*\*/g, '')
+        }));
+
+        const estadoChat = isLiveChatRequest || nextStep === 'live_chat'
+            ? 'esperando_asesor'
+            : nextStep === 'end_flow'
+                ? 'Finalizado'
+                : 'En Curso';
+
+        try {
+            const res = await fetch(`${API_BASE_URL}/api/chat-log`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    id: chatId,
+                    token,
+                    orden_id: data.idoperacion || null,
+                    codisegui: data.codisegui || null,
+                    phone: data.cliente_telefono || null,
+                    grupo_servicio: area || (data.tipo === 'ticket' ? 'Visita Técnica' : 'Instalaciones'),
+                    motivo,
+                    estado_chat: estadoChat,
+                    ultimo_mensaje_por: 'cliente',
+                    mensajes_json: mensajesFormateados
+                }),
+                keepalive: true
+            });
+            const json = await res.json();
+            if (json.success && json.id && !chatId) {
+                setChatId(json.id);
+                sessionStorage.setItem(`win_chat_id_${token}`, String(json.id));
+            }
+        } catch (err) {
+            console.error('Error en /api/chat-log:', err);
+        }
     };
 
-    const updated = [...messages, userMsg, botMsg];
-    setMessages(updated);
-    setMotivo(motivoKey);
-    setStep(selectedStep);
-    setEstadoChat("en_curso");
-    trackEvent("chat_opcion_seleccionada", { token, motivo: motivoKey });
-    syncChatLog(updated, "en_curso", motivoKey, "cliente");
-  };
+    const appendInteraction = (
+        userText: string,
+        botText: string,
+        nextStep: FlowStep,
+        badgeMotivo?: string,
+        isLiveChatRequest = false
+    ) => {
+        const newMotivo =
+            step === 'menu_visita_tecnica' || step === 'menu_instalaciones'
+                ? userText.replace(/^\d+\.\s*/, '')
+                : badgeMotivo || motivoActual;
 
-  const handleStartLiveChat = async () => {
-    const userMsg: ChatMessage = {
-      sender: "user",
-      text: "Quiero hablar con un asesor en línea",
-      timestamp: new Date().toISOString(),
-    };
-    const botWaitMsg: ChatMessage = {
-      sender: "bot",
-      text: "Te estamos conectando con un asesor de WIN. Escribe tu consulta aquí abajo y te responderemos en breve.",
-      timestamp: new Date().toISOString(),
-    };
+        setMotivoActual(newMotivo);
 
-    const updated = [...messages, userMsg, botWaitMsg];
-    setMessages(updated);
-    setStep("live_chat");
-    setEstadoChat("esperando_asesor");
-    trackEvent("chat_solicita_asesor_vivo", { token, motivo: motivo || "consulta_general" });
-    await syncChatLog(updated, "esperando_asesor", motivo || "consulta_general", "cliente");
-  };
+        const nowIso = new Date().toISOString();
+        const userBubble: ChatBubble = { id: `u-${Date.now()}`, sender: 'user', text: userText, fecha_utc: nowIso };
+        const botBubble: ChatBubble = {
+            id: `b-${Date.now() + 1}`,
+            sender: 'bot',
+            text: botText,
+            badge: 'Asistente WIN',
+            fecha_utc: nowIso
+        };
 
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const text = inputText.trim();
-    if (!text || !chatId || isSending) return;
-
-    const optimisticMsg: ChatMessage = {
-      sender: "user",
-      author: "Cliente",
-      text,
-      timestamp: new Date().toISOString(),
+        setMessages(prev => {
+            const updated = [...prev, userBubble, botBubble];
+            saveChatLog(updated, newMotivo, nextStep, isLiveChatRequest);
+            return updated;
+        });
+        setStep(nextStep);
     };
 
-    setMessages((prev) => [...prev, optimisticMsg]);
-    setInputText("");
-    setIsSending(true);
+    // ==========================================================================
+    // PASO 1: SEGMENTACIÓN INICIAL POR ÁREA (1. Visita Técnica | 2. Instalaciones)
+    // ==========================================================================
+    const handleSelectArea = (selectedArea: AreaOperativa, label: string) => {
+        setArea(selectedArea);
+        trackEvent('ayuda_segmentacion_area', { token, area: selectedArea });
 
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/chat-log/${chatId}/mensaje`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          token,
-          sender: "user",
-          text,
-        }),
-      });
-      const json = await res.json();
-      if (json.success && Array.isArray(json.mensajes)) {
-        setMessages(json.mensajes);
-      }
-    } catch (err) {
-      console.error("Error enviando mensaje:", err);
-    } finally {
-      setIsSending(false);
-    }
-  };
-
-  const handleMarkResolved = async () => {
-    const userMsg: ChatMessage = {
-      sender: "user",
-      text: "Todo claro, muchas gracias.",
-      timestamp: new Date().toISOString(),
+        if (selectedArea === 'Visita Técnica') {
+            appendInteraction(
+                label,
+                'Has seleccionado **Visita Técnica**. ¿En qué podemos ayudarte hoy?',
+                'menu_visita_tecnica',
+                'Área: Visita Técnica'
+            );
+        } else {
+            appendInteraction(
+                label,
+                'Has seleccionado **Instalaciones**. ¿En qué podemos ayudarte con tu instalación?',
+                'menu_instalaciones',
+                'Área: Instalaciones'
+            );
+        }
     };
-    const updated = [...messages, userMsg];
-    setMessages(updated);
-    setStep("resuelto");
-    setEstadoChat("resuelto");
-    await syncChatLog(updated, "resuelto", motivo || "resuelto_bot", "cliente");
-  };
 
-  const handleResetChat = () => {
-    if (token) sessionStorage.removeItem(`win_chat_id_${token}`);
-    setChatId(null);
-    setAsesorNombre(null);
-    initBotGreeting();
-  };
+    // ==========================================================================
+    // ÁREA A: SUBMENÚ Y FLUJOS DE VISITA TÉCNICA
+    // ==========================================================================
+    const handleMenuVisitaTecnica = (opcion: 'ya_no_necesito' | 'direccion' | 'problema_tecnico' | 'asesor' | 'consulta', label: string) => {
+        trackEvent('ayuda_opcion_visita_tecnica', { token, area: 'Visita Técnica', opcion });
 
-  return (
-    <AnimatePresence>
-      {isOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={onClose}
-            className="absolute inset-0 bg-black/45 backdrop-blur-[2px]"
-          />
-
-          <motion.div
-            initial={{ y: "100%" }}
-            animate={{ y: 0 }}
-            exit={{ y: "100%" }}
-            transition={{ type: "spring", damping: 28, stiffness: 300 }}
-            className="relative z-10 w-full max-w-md h-[82dvh] sm:h-[620px] bg-[#F8F9FA] rounded-t-[28px] sm:rounded-[28px] shadow-2xl flex flex-col overflow-hidden"
-          >
-            {/* Header */}
-            <div className="bg-[#FF5A0A] px-5 py-4 text-white flex items-center justify-between shrink-0 shadow-sm">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-white/15 flex items-center justify-center">
-                  <Headset className="w-5 h-5 text-white" />
-                </div>
-                <div>
-                  <h3 className="text-[15px] font-bold leading-tight">
-                    {asesorNombre ? asesorNombre : "Soporte WIN en Línea"}
-                  </h3>
-                  <div className="flex items-center gap-1.5 mt-0.5">
-                    <span className="w-2 h-2 rounded-full bg-emerald-300 animate-pulse" />
-                    <span className="text-[11px] text-white/90 font-medium">
-                      {estadoChat === "en_atencion"
-                        ? "Asesor conectado"
-                        : estadoChat === "esperando_asesor"
-                        ? "Conectando con asesor..."
-                        : "Asistente activo"}
-                    </span>
-                  </div>
-                </div>
-              </div>
-              <button
-                onClick={onClose}
-                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors cursor-pointer"
-              >
-                <X className="w-4 h-4 text-white" />
-              </button>
-            </div>
-
-            {/* Historial de Mensajes */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-3">
-              {messages.map((msg, idx) => {
-                const isUser = msg.sender === "user";
-                const isAgent = msg.sender === "agent";
-                return (
-                  <div
-                    key={idx}
-                    className={`flex flex-col ${isUser ? "items-end" : "items-start"}`}
-                  >
-                    {isAgent && (
-                      <span className="text-[11px] font-bold text-[#FF5A0A] mb-1 ml-1">
-                        {msg.author || asesorNombre || "Asesor WIN"}
-                      </span>
-                    )}
-                    <div
-                      className={`max-w-[82%] px-4 py-2.5 rounded-2xl text-[13.5px] leading-relaxed shadow-xs ${
-                        isUser
-                          ? "bg-[#FF5A0A] text-white rounded-br-xs"
-                          : isAgent
-                          ? "bg-white border border-[#FFE0CC] text-gray-900 rounded-bl-xs"
-                          : "bg-white border border-gray-100 text-gray-800 rounded-bl-xs"
-                      }`}
-                    >
-                      {msg.text}
-                    </div>
-                  </div>
+        switch (opcion) {
+            case 'ya_no_necesito':
+                appendInteraction(
+                    label,
+                    '¿Por qué motivo ya no necesitas la visita técnica?',
+                    'vt_ya_no_necesito',
+                    'Visita Técnica'
                 );
-              })}
+                break;
+            case 'direccion':
+                appendInteraction(
+                    label,
+                    'Vamos a actualizar la ubicación de tu visita paso a paso.\n\n**Paso 1 de 3:** Por favor, escribe el **Distrito** correcto:',
+                    'vt_dir_step1_distrito',
+                    'Visita Técnica • Ubicación'
+                );
+                break;
+            case 'problema_tecnico':
+                appendInteraction(
+                    label,
+                    'Lamentamos lo sucedido. Por favor, selecciona el inconveniente ocurrido con el técnico:',
+                    'mod_problema_tecnico',
+                    'Visita Técnica • Calidad'
+                );
+                break;
+            case 'asesor':
+                appendInteraction(
+                    label,
+                    'Antes de conectarte en línea con un especialista, selecciona el motivo por el cual deseas hablar con un asesor:',
+                    'mod_hablar_asesor',
+                    'Visita Técnica • Asesor'
+                );
+                break;
+            case 'consulta':
+                appendInteraction(
+                    label,
+                    '¿Qué información de tu ticket de visita técnica deseas consultar?',
+                    'mod_realizar_consulta',
+                    'Visita Técnica • Consulta BD'
+                );
+                break;
+        }
+    };
 
-              {/* Opciones Rápidas del Bot (antes de pasar a Live Chat) */}
-              {step === "inicio" && (
-                <div className="pt-2 flex flex-col gap-2">
-                  <button
-                    onClick={() =>
-                      handleSelectOption("demora", "¿Cuánto falta para que llegue el técnico?", "consulta_demora")
-                    }
-                    className="w-full text-left bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-[13px] font-semibold text-gray-800 transition-all cursor-pointer"
-                  >
-                    🕒 ¿Cuánto falta para que llegue el técnico?
-                  </button>
-                  <button
-                    onClick={() =>
-                      handleSelectOption("horario", "Necesito cambiar la fecha u horario", "cambio_horario")
-                    }
-                    className="w-full text-left bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-[13px] font-semibold text-gray-800 transition-all cursor-pointer"
-                  >
-                    📅 Necesito cambiar la fecha u horario
-                  </button>
-                  <button
-                    onClick={() =>
-                      handleSelectOption("tecnico", "Información sobre mi técnico asignado", "info_tecnico")
-                    }
-                    className="w-full text-left bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-[13px] font-semibold text-gray-800 transition-all cursor-pointer"
-                  >
-                    👷 Información sobre mi técnico asignado
-                  </button>
-                  <button
-                    onClick={handleStartLiveChat}
-                    className="w-full text-left bg-[#FFF6ED] hover:bg-[#FFEFE0] border border-[#FFD8BE] rounded-xl px-4 py-3 text-[13px] font-bold text-[#FF5A0A] transition-all cursor-pointer"
-                  >
-                    💬 Hablar con un asesor en vivo
-                  </button>
-                </div>
-              )}
+    const handleVtYaNoNecesito = (motivo: 'ok' | 'otro' | 'sin_disponibilidad', label: string) => {
+        if (motivo === 'ok') {
+            trackEvent('ayuda_vt_ticket_resuelto', {
+                token,
+                area: 'Visita Técnica',
+                accion: 'Ticket actualizado a Resuelto'
+            });
+            appendInteraction(
+                label,
+                '✅ ¡Qué buena noticia! Hemos actualizado tu ticket a **Resuelto**. Muchas gracias por notificarnos y que sigas disfrutando de tu conexión WIN.',
+                'end_flow'
+            );
+            if (onCancelVisitSuccess) onCancelVisitSuccess();
+        } else if (motivo === 'otro') {
+            appendInteraction(
+                label,
+                'Por favor, escribe a continuación el motivo por el cual ya no necesitas la visita técnica:',
+                'vt_input_otro_motivo'
+            );
+        } else if (motivo === 'sin_disponibilidad') {
+            appendInteraction(
+                label,
+                'Entendemos que no cuentas con disponibilidad en este horario. ¿Qué deseas hacer?',
+                'vt_sin_disponibilidad'
+            );
+        }
+    };
 
-              {(step === "demora" || step === "horario" || step === "tecnico") && (
-                <div className="pt-2 flex flex-col gap-2">
-                  {step === "horario" && canReprogram && (
-                    <button
-                      onClick={() => {
-                        onClose();
-                        onOpenReprogram();
-                      }}
-                      className="w-full bg-[#26292E] hover:bg-black text-white rounded-xl px-4 py-3 text-[13px] font-bold flex items-center justify-center gap-2 cursor-pointer"
+    const handleVtDisponibilidad = (accion: 'no_desea' | 'reprogramar', label: string) => {
+        if (accion === 'no_desea') {
+            trackEvent('ayuda_vt_flujo_cancelado', {
+                token,
+                area: 'Visita Técnica',
+                accion: 'Mover flujo a Cancelado'
+            });
+            appendInteraction(
+                label,
+                'Hemos movido tu solicitud a **Cancelado**. Si en otro momento necesitas retomar la visita técnica, estaremos a tu disposición.',
+                'end_flow'
+            );
+            if (onCancelVisitSuccess) onCancelVisitSuccess();
+        } else {
+            trackEvent('ayuda_vt_redirigir_reprogramacion', { token, area: 'Visita Técnica' });
+            onClose();
+            onOpenReprogram();
+        }
+    };
+
+    // Paso 3 de Dirección Incorrecta (Coordenada GPS Opcional)
+    const guardarDireccionVisitaTecnica = (gpsCoords: string | null, userLabel: string) => {
+        trackEvent('ayuda_vt_guardar_direccion', {
+            token,
+            area: 'Visita Técnica',
+            distrito: distritoTemp,
+            direccion_referencia: direccionTemp,
+            coordenada_gps: gpsCoords || 'Omitido'
+        });
+
+        appendInteraction(
+            userLabel,
+            `✅ **Ubicación actualizada con éxito:**\n• **Distrito:** ${toTitleCase(distritoTemp)}\n• **Dirección y ref.:** ${direccionTemp}${gpsCoords ? `\n• **Coordenada GPS:** ${gpsCoords}` : '\n• **Coordenada GPS:** Omitida'
+            }\n\nHemos guardado los datos en tu ticket de Visita Técnica.`,
+            'end_flow'
+        );
+    };
+
+    const handleCaptureGpsOptional = () => {
+        if (!('geolocation' in navigator)) {
+            guardarDireccionVisitaTecnica(null, 'Omitir (GPS no disponible)');
+            return;
+        }
+
+        setIsGettingGps(true);
+        navigator.geolocation.getCurrentPosition(
+            (pos) => {
+                setIsGettingGps(false);
+                const coords = `${pos.coords.latitude.toFixed(6)}, ${pos.coords.longitude.toFixed(6)}`;
+                guardarDireccionVisitaTecnica(coords, `Confirmar Coordenada GPS (${coords})`);
+            },
+            () => {
+                setIsGettingGps(false);
+                guardarDireccionVisitaTecnica(null, 'Omitir');
+            },
+            { enableHighAccuracy: true, timeout: 8000 }
+        );
+    };
+
+    // ==========================================================================
+    // ÁREA B: SUBMENÚ Y FLUJOS DE INSTALACIONES
+    // ==========================================================================
+    const handleMenuInstalaciones = (opcion: 'problema_tecnico' | 'consulta' | 'asesor', label: string) => {
+        trackEvent('ayuda_opcion_instalaciones', { token, area: 'Instalaciones', opcion });
+
+        switch (opcion) {
+            case 'problema_tecnico':
+                appendInteraction(
+                    label,
+                    'Lamentamos lo sucedido. Por favor, selecciona el inconveniente ocurrido con el técnico:',
+                    'mod_problema_tecnico',
+                    'Instalaciones • Calidad'
+                );
+                break;
+            case 'consulta':
+                appendInteraction(
+                    label,
+                    '¿Qué información de tu instalación deseas consultar?',
+                    'mod_realizar_consulta',
+                    'Instalaciones • Consulta BD'
+                );
+                break;
+            case 'asesor':
+                appendInteraction(
+                    label,
+                    'Antes de conectarte en línea con un especialista, selecciona el motivo por el cual deseas hablar con un asesor:',
+                    'mod_hablar_asesor',
+                    'Instalaciones • Asesor'
+                );
+                break;
+        }
+    };
+
+    // ==========================================================================
+    // MÓDULO COMPARTIDO: PROBLEMA CON UN TÉCNICO
+    // ==========================================================================
+    const handleSelectProblemaTecnico = (inconveniente: string, isOtro = false) => {
+        const currentArea = area || 'Instalaciones';
+        if (isOtro) {
+            appendInteraction(
+                inconveniente,
+                'Por favor, describe brevemente el inconveniente ocurrido con el técnico:',
+                'mod_input_otro_problema',
+                `${currentArea} • Calidad`
+            );
+            return;
+        }
+
+        trackEvent('ayuda_registro_incidente_tecnico', {
+            token,
+            area: currentArea,
+            inconveniente,
+            tecnico: data.tecnico?.nombre || 'Sin asignar',
+            cuadrilla: data.tecnico?.cuadrilla || 'Sin cuadrilla'
+        });
+
+        appendInteraction(
+            inconveniente,
+            `✅ **Incidente registrado en ${currentArea}:**\nHemos asociado el reporte ("${inconveniente}") a tu orden #${data.codisegui || data.idoperacion || ''
+            } para que nuestro equipo supervisor tome las medidas correspondientes.`,
+            'end_flow'
+        );
+    };
+
+    // ==========================================================================
+    // MÓDULO: REALIZAR UNA CONSULTA (CONEXIÓN A BASE DE DATOS + VALIDACIÓN)
+    // ==========================================================================
+    const handleInitiateConsulta = (field: ConsultaField, label: string) => {
+        setPendingQuery({ field, label });
+        const promptMsg = expectedPin
+            ? '🔒 Por tu seguridad, ingresa tu **código PIN de 4 dígitos** (o los últimos 4 dígitos de tu teléfono registrado) para validar tu identidad y consultar en la Base de Datos:'
+            : '🔒 Por tu seguridad, escribe tu **nombre o los últimos 4 dígitos de tu teléfono** para validar tu identidad:';
+
+        appendInteraction(label, promptMsg, 'mod_validar_consulta', `${area || 'Consulta'} • Validación`);
+    };
+
+    const ejecutarConsultaBaseDeDatos = (field: ConsultaField, validationInput: string) => {
+        const currentArea = area || 'Instalaciones';
+        const dbSource = currentArea === 'Visita Técnica' ? 'query_db_visita_tecnica' : 'query_db_instalaciones';
+
+        trackEvent(dbSource, {
+            token,
+            area: currentArea,
+            campo_consultado: field
+        });
+
+        const estadoLegible: Record<string, string> = {
+            programada: 'Programada / Agendada',
+            asignado: 'Técnico Asignado',
+            en_camino: 'En Camino a tu domicilio',
+            en_proceso: 'En Proceso de atención',
+            finalizada: 'Finalizada',
+            cerrada: 'Cerrada'
+        };
+
+        let respuestaDato = '';
+        if (field === 'telefono') {
+            respuestaDato = `📱 **Número de teléfono registrado:**\n${data.cliente_telefono || 'No figura teléfono móvil en la orden actual'}`;
+        } else if (field === 'titular') {
+            respuestaDato = `👤 **Nombre del titular:**\n${toTitleCase(data.cliente_nombre || 'Titular WIN')}`;
+        } else if (field === 'direccion') {
+            respuestaDato = `📍 **Dirección registrada:**\n${formatAddress(data.direccion)}`;
+        } else if (field === 'estado_datos') {
+            const parsed = parsePlanData(data.campana);
+            const paquete = parsed.paquete
+                ? toTitleCase(parsed.paquete)
+                : toTitleCase(data.producto || data.tipo_trabajo || data.campana || 'Servicio Fibra WIN');
+            const svas = parsed.svas.length > 0 ? `\n• **Adicionales:** ${parsed.svas.join(', ')}` : '';
+            const estadoActual = estadoLegible[data.status] || toTitleCase(data.status);
+            const horario = data.tramo ? `\n• **Rango horario:** ${formatTramoToRange(data.tramo)}` : '';
+            const codOrden = data.codisegui || data.idoperacion || 'Registrado';
+
+            respuestaDato = `📋 **Estado y datos de tu ${currentArea.toLowerCase()}:**\n• **Estado actual:** ${estadoActual}\n• **Código / Ticket:** ${codOrden}\n• **Detalle del servicio:** ${paquete}${svas}${horario}`;
+        }
+
+        appendInteraction(
+            `Validación: ${validationInput}`,
+            `✅ Identidad validada.\n\n${respuestaDato}`,
+            'end_flow',
+            currentArea
+        );
+        setPendingQuery(null);
+    };
+
+    // ==========================================================================
+    // MÓDULO COMPARTIDO: HABLAR CON UN ASESOR (EN VIVO DESDE EL MISMO CHAT)
+    // ==========================================================================
+    const finalizarDerivacionAsesor = (motivo: string) => {
+        const currentArea: AreaOperativa = area || (data.tipo === 'ticket' ? 'Visita Técnica' : 'Instalaciones');
+
+        trackEvent('ayuda_hablar_con_asesor', {
+            token,
+            area: currentArea,
+            motivo
+        });
+
+        appendInteraction(
+            motivo,
+            `💬 **Conectando con un asesor de ${currentArea}...**\nHemos registrado tu motivo (**${motivo}**). Un asesor de WIN te responderá por este mismo chat en unos instantes. Puedes escribirnos tus dudas aquí abajo:`,
+            'live_chat',
+            motivo,
+            true
+        );
+    };
+
+    const handleSelectMotivoAsesor = (motivo: string, isOtro = false) => {
+        if (isOtro) {
+            appendInteraction(
+                motivo,
+                'Por favor, escribe brevemente el motivo por el cual deseas comunicarte con un asesor:',
+                'mod_input_otro_asesor',
+                `${area || 'Atención'} • Asesor`
+            );
+            return;
+        }
+        finalizarDerivacionAsesor(motivo);
+    };
+
+    // ==========================================================================
+    // MANEJO DE CAMPOS ABIERTOS DE TEXTO (SECUENCIALES, DETALLES Y LIVE CHAT)
+    // ==========================================================================
+    const handleTextSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        const clean = inputText.trim();
+        if (!clean) return;
+
+        // 0. CHAT EN VIVO CON ASESOR
+        if (step === 'live_chat') {
+            if (isSendingLive) return;
+            setInputText('');
+
+            const nowIso = new Date().toISOString();
+            const optimisticBubble: ChatBubble = {
+                id: `u-${Date.now()}`,
+                sender: 'user',
+                text: clean,
+                fecha_utc: nowIso
+            };
+
+            const nextList = [...messages, optimisticBubble];
+            setMessages(nextList);
+
+            if (!chatId) {
+                await saveChatLog(nextList, motivoActual, 'live_chat', true);
+                return;
+            }
+
+            setIsSendingLive(true);
+            try {
+                const res = await fetch(`${API_BASE_URL}/api/chat-log/${chatId}/mensaje`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        token,
+                        sender: 'user',
+                        text: clean
+                    })
+                });
+                const json = await res.json();
+                if (json.success && Array.isArray(json.mensajes)) {
+                    setMessages(mapDbMessagesToBubbles(json.mensajes));
+                }
+            } catch (err) {
+                console.error('Error enviando mensaje en vivo:', err);
+            } finally {
+                setIsSendingLive(false);
+            }
+            return;
+        }
+
+        // 1. Exclusivo Visita Técnica: "Ya no necesito ayuda -> Otro motivo"
+        if (step === 'vt_input_otro_motivo') {
+            setInputText('');
+            trackEvent('ayuda_vt_otro_motivo_guardado', {
+                token,
+                area: 'Visita Técnica',
+                motivo: clean
+            });
+            appendInteraction(
+                clean,
+                '✅ Hemos guardado tu respuesta. ¡Gracias por informarnos!',
+                'end_flow'
+            );
+            return;
+        }
+
+        // 2. Exclusivo Visita Técnica: "Dirección incorrecta" (Paso 1 -> Distrito)
+        if (step === 'vt_dir_step1_distrito') {
+            setInputText('');
+            setDistritoTemp(clean);
+            appendInteraction(
+                clean,
+                `Distrito registrado: **${toTitleCase(clean)}**.\n\n**Paso 2 de 3:** Ahora escribe tu **Dirección correcta y referencia**:`,
+                'vt_dir_step2_direccion'
+            );
+            return;
+        }
+
+        // 3. Exclusivo Visita Técnica: "Dirección incorrecta" (Paso 2 -> Dirección y referencia)
+        if (step === 'vt_dir_step2_direccion') {
+            setInputText('');
+            setDireccionTemp(clean);
+            appendInteraction(
+                clean,
+                '**Paso 3 de 3 (Opcional):** ¿Deseas confirmar tu **Coordenada GPS** actual? Este paso es totalmente **OPCIONAL** (puedes tocar o escribir "Omitir").',
+                'vt_dir_step3_gps'
+            );
+            return;
+        }
+
+        // 4. Si en el Paso 3 de GPS el usuario escribe "Omitir" manualmente
+        if (step === 'vt_dir_step3_gps') {
+            setInputText('');
+            guardarDireccionVisitaTecnica(null, clean);
+            return;
+        }
+
+        // 5. Módulo Problema con un técnico -> Otro inconveniente
+        if (step === 'mod_input_otro_problema') {
+            setInputText('');
+            const currentArea = area || 'Instalaciones';
+            trackEvent('ayuda_registro_incidente_tecnico', {
+                token,
+                area: currentArea,
+                inconveniente: `Otro: ${clean}`,
+                tecnico: data.tecnico?.nombre || 'Sin asignar'
+            });
+            appendInteraction(
+                clean,
+                `✅ **Incidente registrado en ${currentArea}:**\nHemos guardado el detalle de tu reporte en el sistema para el seguimiento de supervisión.`,
+                'end_flow'
+            );
+            return;
+        }
+
+        // 6. Validación antes de consultar en Base de Datos
+        if (step === 'mod_validar_consulta' && pendingQuery) {
+            const cleanDigits = clean.replace(/\D/g, '');
+            const phoneLast4 = (data.cliente_telefono || '').replace(/\D/g, '').slice(-4);
+            const isValidPin = expectedPin && clean === expectedPin;
+            const isValidPhone = phoneLast4 && cleanDigits.length === 4 && cleanDigits === phoneLast4;
+            const isValidName =
+                data.cliente_nombre &&
+                clean.length >= 3 &&
+                data.cliente_nombre.toLowerCase().includes(clean.toLowerCase());
+
+            if (expectedPin && !isValidPin && !isValidPhone && !isValidName) {
+                setInputText('');
+                setMessages(prev => [
+                    ...prev,
+                    { id: `u-${Date.now()}`, sender: 'user', text: clean },
+                    {
+                        id: `b-${Date.now() + 1}`,
+                        sender: 'bot',
+                        text: '⚠️ El código o dato ingresado no coincide con el titular de la orden. Por favor, ingresa el **PIN de 4 dígitos** que aparece en tu pantalla de seguimiento (o el primer nombre del titular):'
+                    }
+                ]);
+                return;
+            }
+
+            setInputText('');
+            ejecutarConsultaBaseDeDatos(pendingQuery.field, clean);
+            return;
+        }
+
+        // 7. Módulo Hablar con un asesor -> Otro motivo
+        if (step === 'mod_input_otro_asesor') {
+            setInputText('');
+            finalizarDerivacionAsesor(clean);
+            return;
+        }
+    };
+
+    const isTextInputVisible =
+        step === 'live_chat' ||
+        step === 'vt_input_otro_motivo' ||
+        step === 'vt_dir_step1_distrito' ||
+        step === 'vt_dir_step2_direccion' ||
+        step === 'vt_dir_step3_gps' ||
+        step === 'mod_input_otro_problema' ||
+        step === 'mod_validar_consulta' ||
+        step === 'mod_input_otro_asesor';
+
+    return (
+        <AnimatePresence>
+            {isOpen && (
+                <div className="fixed inset-0 z-[120] flex flex-col justify-end font-sans">
+                    {/* Backdrop */}
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        onClick={onClose}
+                        className="fixed inset-0 bg-[#26292E]/45 backdrop-blur-[2px]"
+                    />
+
+                    {/* Contenedor Principal del Asistente */}
+                    <motion.div
+                        initial={{ y: "100%" }}
+                        animate={{ y: 0 }}
+                        exit={{ y: "100%" }}
+                        transition={{ type: "spring", damping: 28, stiffness: 280 }}
+                        className="relative z-10 w-full max-w-md mx-auto bg-[#F8F9FB] rounded-t-[28px] shadow-2xl flex flex-col max-h-[86dvh] overflow-hidden border-t border-gray-100"
                     >
-                      <CalendarDays className="w-4 h-4" />
-                      Reprogramar visita ahora
-                    </button>
-                  )}
-                  <button
-                    onClick={handleStartLiveChat}
-                    className="w-full bg-[#FF5A0A] hover:bg-[#E04E07] text-white rounded-xl px-4 py-3 text-[13px] font-bold flex items-center justify-center gap-2 cursor-pointer shadow-xs"
-                  >
-                    <Headset className="w-4 h-4" />
-                    Chatear con un asesor en línea
-                  </button>
-                  <button
-                    onClick={handleMarkResolved}
-                    className="w-full bg-white hover:bg-gray-50 border border-gray-200 text-gray-700 rounded-xl px-4 py-2.5 text-[13px] font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                    Ya resolví mi duda
-                  </button>
+                        {/* Drag Handle */}
+                        <div className="w-full bg-white flex justify-center pt-2.5 pb-1 shrink-0">
+                            <div className="w-10 h-1 bg-[#D9D9D9] rounded-full" />
+                        </div>
+
+                        {/* Cabecera */}
+                        <div className="bg-white px-5 py-3 border-b border-gray-100 flex items-center justify-between shrink-0">
+                            <div className="flex items-center gap-2.5">
+                                <div className="w-9 h-9 rounded-full bg-[#FFF0E6] border border-[#FFD8C2] flex items-center justify-center text-[#FF5A0A] shrink-0">
+                                    <Sparkles className="w-4 h-4 fill-[#FF5A0A]" />
+                                </div>
+                                <div>
+                                    <h3 className="text-[15px] font-bold text-[#26292E] leading-tight">
+                                        {step === 'live_chat' && asesorNombre
+                                            ? `Asesor: ${asesorNombre}`
+                                            : 'Asistente Virtual WIN'}
+                                    </h3>
+                                    {step === 'live_chat' && (
+                                        <span className="text-[11px] font-medium text-emerald-600 flex items-center gap-1 mt-0.5">
+                                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                            {asesorNombre ? 'En línea contigo' : 'Esperando a un asesor...'}
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="flex items-center gap-1">
+                                {step !== 'menu_visita_tecnica' && step !== 'menu_instalaciones' && (
+                                    <button
+                                        type="button"
+                                        onClick={() => initConversation(true)}
+                                        title="Volver al menú principal"
+                                        className="p-2 rounded-full text-gray-400 hover:text-[#FF5A0A] hover:bg-orange-50 transition-colors cursor-pointer"
+                                    >
+                                        <RotateCcw className="w-4 h-4" />
+                                    </button>
+                                )}
+                                <button
+                                    type="button"
+                                    onClick={onClose}
+                                    aria-label="Cerrar"
+                                    className="p-2 rounded-full text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
+                                >
+                                    <X className="w-5 h-5" />
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Historial de Conversación */}
+                        <div className="flex-1 overflow-y-auto p-4 space-y-3.5">
+                            {messages.map((m) => (
+                                <motion.div
+                                    key={m.id}
+                                    initial={{ opacity: 0, y: 8 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    className={`flex flex-col ${m.sender === 'user' ? 'items-end' : 'items-start'}`}
+                                >
+                                    {m.badge && (
+                                        <span
+                                            className={`text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full mb-1 ${
+                                                m.sender === 'agent'
+                                                    ? 'text-emerald-700 bg-emerald-50 border border-emerald-200'
+                                                    : 'text-[#FF5A0A] bg-[#FFEFE7]'
+                                            }`}
+                                        >
+                                            {m.badge}
+                                        </span>
+                                    )}
+                                    <div
+                                        className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-[13px] leading-relaxed whitespace-pre-wrap shadow-2xs ${
+                                            m.sender === 'user'
+                                                ? 'bg-[#FF5A0A] text-white font-semibold rounded-br-xs'
+                                                : m.sender === 'agent'
+                                                    ? 'bg-white text-[#26292E] border-2 border-[#FFD8C2] rounded-bl-xs'
+                                                    : 'bg-white text-[#26292E] border border-gray-100 rounded-bl-xs'
+                                        }`}
+                                    >
+                                        {m.text.split('**').map((part, index) =>
+                                            index % 2 === 1 ? <strong key={index} className="font-bold">{part}</strong> : part
+                                        )}
+                                    </div>
+                                </motion.div>
+                            ))}
+
+                            {/* CONTROLES INTERACTIVOS POR PASO */}
+                            <div className="pt-1 space-y-2">
+                                {/* PASO 1: SEGMENTACIÓN INICIAL (Únicamente 2 opciones) */}
+                                {step === 'step1_area' && (
+                                    <div className="grid grid-cols-1 gap-2.5">
+                                        <button
+                                            type="button"
+                                            onClick={() => handleSelectArea('Visita Técnica', '1. Visita Técnica')}
+                                            className="w-full bg-white hover:bg-[#FFF6ED] active:scale-[0.99] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3.5 text-left text-[13.5px] font-bold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all shadow-2xs cursor-pointer group"
+                                        >
+                                            <span>1. Visita Técnica</span>
+                                            <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleSelectArea('Instalaciones', '2. Instalaciones')}
+                                            className="w-full bg-white hover:bg-[#FFF6ED] active:scale-[0.99] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3.5 text-left text-[13.5px] font-bold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all shadow-2xs cursor-pointer group"
+                                        >
+                                            <span>2. Instalaciones</span>
+                                            <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
+                                        </button>
+                                    </div>
+                                )}
+
+                                {/* ÁREA A: SUBMENÚ VISITA TÉCNICA */}
+                                {step === 'menu_visita_tecnica' && (
+                                    <div className="grid grid-cols-1 gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => handleMenuVisitaTecnica('ya_no_necesito', '1. Ya no necesito ayuda')}
+                                            className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer group"
+                                        >
+                                            <span>1. Ya no necesito ayuda</span>
+                                            <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleMenuVisitaTecnica('direccion', '2. Dirección incorrecta')}
+                                            className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer group"
+                                        >
+                                            <span>2. Dirección incorrecta</span>
+                                            <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleMenuVisitaTecnica('problema_tecnico', '3. Problema con un técnico')}
+                                            className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer group"
+                                        >
+                                            <span>3. Problema con un técnico</span>
+                                            <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleMenuVisitaTecnica('asesor', '4. Hablar con un asesor')}
+                                            className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer group"
+                                        >
+                                            <span>4. Hablar con un asesor</span>
+                                            <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleMenuVisitaTecnica('consulta', '5. Realizar una consulta')}
+                                            className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer group"
+                                        >
+                                            <span>5. Realizar una consulta</span>
+                                            <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
+                                        </button>
+                                    </div>
+                                )}
+
+                                {/* ÁREA B: SUBMENÚ INSTALACIONES (Únicamente 3 opciones estrictas) */}
+                                {step === 'menu_instalaciones' && (
+                                    <div className="grid grid-cols-1 gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => handleMenuInstalaciones('problema_tecnico', '1. Problema con un técnico')}
+                                            className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer group"
+                                        >
+                                            <span>1. Problema con un técnico</span>
+                                            <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleMenuInstalaciones('consulta', '2. Realizar una consulta')}
+                                            className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer group"
+                                        >
+                                            <span>2. Realizar una consulta</span>
+                                            <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleMenuInstalaciones('asesor', '3. Hablar con un asesor')}
+                                            className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer group"
+                                        >
+                                            <span>3. Hablar con un asesor</span>
+                                            <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
+                                        </button>
+                                    </div>
+                                )}
+
+                                {/* FLUJO VISITA TÉCNICA: YA NO NECESITO AYUDA */}
+                                {step === 'vt_ya_no_necesito' && (
+                                    <div className="flex flex-col gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => handleVtYaNoNecesito('ok', 'Mi servicio ya está OK')}
+                                            className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] transition-all cursor-pointer"
+                                        >
+                                            Mi servicio ya está OK
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleVtYaNoNecesito('otro', 'Otro motivo')}
+                                            className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] transition-all cursor-pointer"
+                                        >
+                                            Otro motivo
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleVtYaNoNecesito('sin_disponibilidad', 'No tengo disponibilidad')}
+                                            className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] transition-all cursor-pointer"
+                                        >
+                                            No tengo disponibilidad
+                                        </button>
+                                    </div>
+                                )}
+
+                                {/* FLUJO VISITA TÉCNICA: NO TENGO DISPONIBILIDAD */}
+                                {step === 'vt_sin_disponibilidad' && (
+                                    <div className="flex flex-col gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => handleVtDisponibilidad('no_desea', '1. No desea')}
+                                            className="w-full bg-white hover:bg-rose-50 border border-gray-200 hover:border-rose-300 rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-rose-600 transition-all cursor-pointer"
+                                        >
+                                            1. No desea
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleVtDisponibilidad('reprogramar', '2. Reprogramar')}
+                                            className="w-full bg-[#FF5A0A] hover:bg-[#E04E07] text-white rounded-xl px-4 py-3 text-left text-[13px] font-bold flex items-center justify-between transition-all shadow-sm cursor-pointer"
+                                        >
+                                            <span className="flex items-center gap-2">
+                                                <CalendarDays className="w-4 h-4" />
+                                                2. Reprogramar (Fecha y hora)
+                                            </span>
+                                            <ChevronRight className="w-4 h-4" />
+                                        </button>
+                                    </div>
+                                )}
+
+                                {/* FLUJO VISITA TÉCNICA: DIRECCIÓN INCORRECTA PASO 3 (GPS OPCIONAL) */}
+                                {step === 'vt_dir_step3_gps' && (
+                                    <div className="flex flex-col gap-2">
+                                        <button
+                                            type="button"
+                                            disabled={isGettingGps}
+                                            onClick={handleCaptureGpsOptional}
+                                            className="w-full bg-[#FF5A0A] hover:bg-[#E04E07] disabled:opacity-60 text-white rounded-xl px-4 py-3 text-[13px] font-bold flex items-center justify-center gap-2 transition-all shadow-sm cursor-pointer"
+                                        >
+                                            <Navigation className="w-4 h-4" />
+                                            <span>{isGettingGps ? 'Obteniendo ubicación GPS...' : 'Confirmar Coordenada GPS'}</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            disabled={isGettingGps}
+                                            onClick={() => guardarDireccionVisitaTecnica(null, 'Omitir')}
+                                            className="w-full bg-white hover:bg-gray-50 border border-gray-200 rounded-xl px-4 py-2.5 text-[13px] font-semibold text-gray-600 transition-all cursor-pointer text-center"
+                                        >
+                                            Omitir (Guardar sin GPS)
+                                        </button>
+                                    </div>
+                                )}
+
+                                {/* MÓDULO COMPARTIDO: PROBLEMA CON UN TÉCNICO */}
+                                {step === 'mod_problema_tecnico' && (
+                                    <div className="flex flex-col gap-2">
+                                        {[
+                                            'El técnico no llegó en el horario acordado.',
+                                            'Mal trato o actitud inadecuada.',
+                                            'Trabajo incompleto o mala instalación/reparación.'
+                                        ].map((inc) => (
+                                            <button
+                                                key={inc}
+                                                type="button"
+                                                onClick={() => handleSelectProblemaTecnico(inc, false)}
+                                                className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] transition-all cursor-pointer"
+                                            >
+                                                {inc}
+                                            </button>
+                                        ))}
+                                        <button
+                                            type="button"
+                                            onClick={() => handleSelectProblemaTecnico('Otro inconveniente', true)}
+                                            className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] transition-all cursor-pointer"
+                                        >
+                                            Otro inconveniente
+                                        </button>
+                                    </div>
+                                )}
+
+                                {/* MÓDULO: REALIZAR UNA CONSULTA (4 OPCIONES) */}
+                                {step === 'mod_realizar_consulta' && (
+                                    <div className="flex flex-col gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => handleInitiateConsulta('telefono', '1. Número de teléfono registrado')}
+                                            className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] transition-all cursor-pointer"
+                                        >
+                                            1. Número de teléfono registrado
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleInitiateConsulta('titular', '2. Nombre del titular')}
+                                            className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] transition-all cursor-pointer"
+                                        >
+                                            2. Nombre del titular
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleInitiateConsulta('direccion', '3. Dirección registrada')}
+                                            className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] transition-all cursor-pointer"
+                                        >
+                                            3. Dirección registrada
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() =>
+                                                handleInitiateConsulta(
+                                                    'estado_datos',
+                                                    area === 'Visita Técnica'
+                                                        ? '4. Estado u otros datos de la visita técnica'
+                                                        : '4. Estado u otros datos de la instalación'
+                                                )
+                                            }
+                                            className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] transition-all cursor-pointer"
+                                        >
+                                            {area === 'Visita Técnica'
+                                                ? '4. Estado u otros datos de la visita técnica'
+                                                : '4. Estado u otros datos de la instalación'}
+                                        </button>
+                                    </div>
+                                )}
+
+                                {/* Botón rápido de validación si el cliente ya está autenticado con su link único */}
+                                {step === 'mod_validar_consulta' && pendingQuery && (
+                                    <div className="pt-1">
+                                        <button
+                                            type="button"
+                                            onClick={() =>
+                                                ejecutarConsultaBaseDeDatos(
+                                                    pendingQuery.field,
+                                                    expectedPin || ' Enlace Único Verificado'
+                                                )
+                                            }
+                                            className="w-full bg-[#FFF6ED] hover:bg-[#FFEFE0] border border-[#FFD8C2] text-[#FF5A0A] rounded-xl px-4 py-2.5 text-[12px] font-bold flex items-center justify-center gap-2 transition-all cursor-pointer"
+                                        >
+                                            <ShieldCheck className="w-4 h-4" />
+                                            <span>Validar automáticamente con mi enlace seguro</span>
+                                        </button>
+                                    </div>
+                                )}
+
+                                {/* MÓDULO COMPARTIDO: HABLAR CON UN ASESOR */}
+                                {step === 'mod_hablar_asesor' && (
+                                    <div className="flex flex-col gap-2">
+                                        {[
+                                            'Consulta de horarios o demora en la atención',
+                                            'Problemas con la orden / facturación',
+                                            'Modificación de datos o traslado'
+                                        ].map((mot) => (
+                                            <button
+                                                key={mot}
+                                                type="button"
+                                                onClick={() => handleSelectMotivoAsesor(mot, false)}
+                                                className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer group"
+                                            >
+                                                <span>{mot}</span>
+                                                <MessageCircle className="w-4 h-4 text-[#FF5A0A] group-hover:scale-110 transition-transform shrink-0 ml-2" />
+                                            </button>
+                                        ))}
+                                        <button
+                                            type="button"
+                                            onClick={() => handleSelectMotivoAsesor('Otro motivo', true)}
+                                            className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer group"
+                                        >
+                                            <span>Otro motivo</span>
+                                            <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
+                                        </button>
+                                    </div>
+                                )}
+
+                                {/* FIN DEL FLUJO */}
+                                {step === 'end_flow' && (
+                                    <div className="pt-2 flex flex-col gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => initConversation(true)}
+                                            className="w-full bg-white hover:bg-gray-50 border border-gray-200 rounded-full h-11 text-[13px] font-bold text-[#26292E] flex items-center justify-center gap-2 transition-all cursor-pointer"
+                                        >
+                                            <RotateCcw className="w-3.5 h-3.5" />
+                                            <span>Volver al menú principal</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={onClose}
+                                            className="w-full bg-[#FF5A0A] hover:bg-[#E04E07] text-white rounded-full h-11 text-[13px] font-bold flex items-center justify-center gap-2 transition-all shadow-sm cursor-pointer"
+                                        >
+                                            <CheckCircle2 className="w-4 h-4" />
+                                            <span>Finalizar y cerrar</span>
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div ref={chatEndRef} />
+                        </div>
+
+                        {/* Barra de Entrada de Texto (Visible en campos abiertos, validación y live_chat) */}
+                        {isTextInputVisible && (
+                            <form
+                                onSubmit={handleTextSubmit}
+                                className="bg-white p-3 border-t border-gray-100 flex items-center gap-2 shrink-0"
+                            >
+                                <input
+                                    type="text"
+                                    autoFocus
+                                    value={inputText}
+                                    onChange={(e) => setInputText(e.target.value)}
+                                    placeholder={
+                                        step === 'live_chat'
+                                            ? 'Escribe tu mensaje para el asesor...'
+                                            : step === 'vt_dir_step1_distrito'
+                                                ? 'Escribe el distrito (Ej: Surco, San Isidro)...'
+                                                : step === 'vt_dir_step2_direccion'
+                                                    ? 'Escribe la dirección exacta y referencia...'
+                                                    : step === 'vt_dir_step3_gps'
+                                                        ? 'Escribe "Omitir" o usa los botones de arriba...'
+                                                        : step === 'mod_validar_consulta'
+                                                            ? 'Ingresa tu PIN de 4 dígitos...'
+                                                            : 'Escribe el detalle aquí...'
+                                    }
+                                    className="flex-1 h-11 bg-[#F5F6F8] border border-gray-200 rounded-full px-4 text-[13px] text-[#26292E] focus:outline-none focus:border-[#FF5A0A]"
+                                />
+                                <button
+                                    type="submit"
+                                    disabled={!inputText.trim() || isSendingLive}
+                                    className="w-11 h-11 rounded-full bg-[#FF5A0A] disabled:bg-gray-200 text-white flex items-center justify-center shrink-0 transition-colors cursor-pointer disabled:cursor-not-allowed"
+                                >
+                                    <Send className="w-4 h-4" />
+                                </button>
+                            </form>
+                        )}
+                    </motion.div>
                 </div>
-              )}
-
-              {step === "resuelto" && (
-                <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 text-center space-y-2">
-                  <p className="text-[13px] font-bold text-emerald-800">
-                    ¡Gracias por comunicarte con nosotros!
-                  </p>
-                  <button
-                    onClick={handleResetChat}
-                    className="inline-flex items-center gap-1.5 text-[12px] font-bold text-[#FF5A0A] hover:underline cursor-pointer"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    Iniciar nueva consulta
-                  </button>
-                </div>
-              )}
-
-              <div ref={messagesEndRef} />
-            </div>
-
-            {/* Input en vivo (Activo cuando está en modo Live Chat) */}
-            {step === "live_chat" && estadoChat !== "resuelto" && (
-              <form
-                onSubmit={handleSendMessage}
-                className="p-3 bg-white border-t border-gray-200 flex items-center gap-2 shrink-0"
-              >
-                <input
-                  type="text"
-                  value={inputText}
-                  onChange={(e) => setInputText(e.target.value)}
-                  placeholder="Escribe tu mensaje aquí..."
-                  className="flex-1 h-11 px-4 rounded-full bg-gray-100 text-[13.5px] text-gray-900 focus:outline-none focus:ring-2 focus:ring-[#FF5A0A]/40"
-                />
-                <button
-                  type="submit"
-                  disabled={!inputText.trim() || isSending}
-                  className="w-11 h-11 rounded-full bg-[#FF5A0A] hover:bg-[#E04E07] disabled:opacity-40 text-white flex items-center justify-center transition-all cursor-pointer shrink-0"
-                >
-                  <Send className="w-4 h-4" />
-                </button>
-              </form>
             )}
-          </motion.div>
-        </div>
-      )}
-    </AnimatePresence>
-  );
+        </AnimatePresence>
+    );
 };

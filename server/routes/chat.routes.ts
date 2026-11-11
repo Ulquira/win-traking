@@ -16,6 +16,7 @@ router.post('/', async (req: Request, res: Response) => {
       motivo,
       estado_chat,
       mensajes,
+      mensajes_json,
       ultimo_mensaje_por
     } = req.body;
 
@@ -23,7 +24,13 @@ router.post('/', async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: 'Token requerido' });
     }
 
-    const mensajesStr = JSON.stringify(Array.isArray(mensajes) ? mensajes : []);
+    const listaMensajes = Array.isArray(mensajes_json)
+      ? mensajes_json
+      : Array.isArray(mensajes)
+        ? mensajes
+        : [];
+
+    const mensajesStr = JSON.stringify(listaMensajes);
     const autorUltimo = ultimo_mensaje_por || 'cliente';
 
     if (id) {
@@ -40,6 +47,29 @@ router.post('/', async (req: Request, res: Response) => {
       return res.json({ success: true, id });
     }
 
+    // Si ya tiene un chat abierto con este token que aún no está finalizado, lo reutilizamos
+    const [existing]: any = await pool.query(
+      `SELECT id FROM logs_chat 
+       WHERE token = ? AND estado_chat NOT IN ('Finalizado', 'resuelto') 
+       ORDER BY id DESC LIMIT 1`,
+      [token]
+    );
+
+    if (existing && existing.length > 0) {
+      const existingId = existing[0].id;
+      await pool.query(
+        `UPDATE logs_chat 
+         SET motivo = COALESCE(?, motivo),
+             estado_chat = COALESCE(?, estado_chat),
+             ultimo_mensaje_por = ?,
+             mensajes_json = ?,
+             updated_at = NOW()
+         WHERE id = ?`,
+        [motivo || null, estado_chat || null, autorUltimo, mensajesStr, existingId]
+      );
+      return res.json({ success: true, id: existingId });
+    }
+
     const [result]: any = await pool.query(
       `INSERT INTO logs_chat 
         (token, orden_id, codisegui, phone, grupo_servicio, motivo, estado_chat, ultimo_mensaje_por, mensajes_json) 
@@ -51,7 +81,7 @@ router.post('/', async (req: Request, res: Response) => {
         phone ? String(phone) : null,
         grupo_servicio || null,
         motivo || null,
-        estado_chat || 'iniciado',
+        estado_chat || 'En Curso',
         autorUltimo,
         mensajesStr
       ]
@@ -63,14 +93,14 @@ router.post('/', async (req: Request, res: Response) => {
   }
 });
 
-// 2. Bandeja para tu otra Web (Panel de Asesor): Listar chats activos
+// 2. Bandeja para el Dashboard de Asesores: Listar chats activos
 router.get('/activos', async (_req: Request, res: Response) => {
   try {
     const [rows]: any = await pool.query(
       `SELECT id, token, orden_id, codisegui, phone, grupo_servicio, motivo, 
               estado_chat, asesor_nombre, ultimo_mensaje_por, mensajes_json, created_at, updated_at
        FROM logs_chat
-       WHERE estado_chat IN ('esperando_asesor', 'en_atencion')
+       WHERE estado_chat IN ('esperando_asesor', 'en_atencion', 'Derivado a Asesor')
        ORDER BY CASE WHEN estado_chat = 'esperando_asesor' THEN 0 ELSE 1 END, updated_at DESC
        LIMIT 100`
     );
@@ -87,7 +117,7 @@ router.get('/activos', async (_req: Request, res: Response) => {
   }
 });
 
-// 3. Polling del Cliente: Obtener estado y mensajes nuevos de su sesión
+// 3. Polling del Cliente: Obtener estado y mensajes de su sesión
 router.get('/:id', async (req: Request, res: Response) => {
   try {
     const chatId = Number(req.params.id);
@@ -131,13 +161,14 @@ router.get('/:id', async (req: Request, res: Response) => {
   }
 });
 
-// 4. Enviar mensaje en vivo (Sirve tanto para Cliente como para Asesor)
+// 4. Enviar mensaje en vivo (Mantiene la estructura original: orden, fecha_utc, emisor, rol, tipo, texto)
 router.post('/:id/mensaje', async (req: Request, res: Response) => {
   try {
     const chatId = Number(req.params.id);
-    const { sender, text, asesor_nombre, nuevo_estado } = req.body;
+    const { sender, text, texto, asesor_nombre, nuevo_estado } = req.body;
+    const cleanText = String(text || texto || '').trim();
 
-    if (!chatId || !text || !String(text).trim()) {
+    if (!chatId || !cleanText) {
       return res.status(400).json({ success: false, message: 'ID y texto requeridos' });
     }
 
@@ -155,17 +186,22 @@ router.post('/:id/mensaje', async (req: Request, res: Response) => {
       : (rows[0].mensajes_json || []);
 
     const isAgent = sender === 'agent' || sender === 'asesor';
+    const nombreAutor = isAgent ? (asesor_nombre || rows[0].asesor_nombre || 'Asesor WIN') : 'Cliente';
+
     const newMsg = {
-      sender: isAgent ? 'agent' : 'user',
-      author: isAgent ? (asesor_nombre || rows[0].asesor_nombre || 'Asesor WIN') : 'Cliente',
-      text: String(text).trim(),
-      timestamp: new Date().toISOString()
+      orden: currentMessages.length + 1,
+      fecha_utc: new Date().toISOString(),
+      emisor: isAgent ? 'ASESOR_WIN' : 'CLIENTE',
+      rol: isAgent ? 'asesor' : 'cliente',
+      autor: nombreAutor,
+      tipo: 'text',
+      texto: cleanText
     };
 
     currentMessages.push(newMsg);
 
     const nextState = nuevo_estado || (isAgent ? 'en_atencion' : rows[0].estado_chat);
-    const nextAsesor = isAgent ? (asesor_nombre || rows[0].asesor_nombre || 'Asesor WIN') : rows[0].asesor_nombre;
+    const nextAsesor = isAgent ? nombreAutor : rows[0].asesor_nombre;
     const ultimoPor = isAgent ? 'asesor' : 'cliente';
 
     await pool.query(
