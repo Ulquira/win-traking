@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import helmet from 'helmet';
 import replicationRouter from './replicationReceiver.ts';
 import clientRoutes from './routes/clientRoutes.ts';
+import chatRoutes from './routes/chat.routes.ts';
 
 dotenv.config();
 
@@ -21,6 +22,7 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 
 app.use(replicationRouter);
+app.use('/api/chat-log', chatRoutes);
 app.use('/api', clientRoutes);
 
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
