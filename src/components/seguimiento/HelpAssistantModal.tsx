@@ -76,6 +76,12 @@ interface PlacePredictionItem {
     fullText: string;
 }
 
+interface GoogleAddressComponent {
+    long_name: string;
+    short_name: string;
+    types: string[];
+}
+
 const GOOGLE_MAPS_KEY =
     import.meta.env.VITE_GOOGLE_MAPS_API_KEY ||
     "AIzaSyA9aYa76-YBAGlanLejHQ55ipqUxX4vkd8";
@@ -106,8 +112,8 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
         coordenadas: string;
     } | null>(null);
 
-    const autocompleteServiceRef = useRef<google.maps.places.AutocompleteService | null>(null);
-    const geocoderRef = useRef<google.maps.Geocoder | null>(null);
+    const autocompleteServiceRef = useRef<any>(null);
+    const geocoderRef = useRef<any>(null);
 
     // Estado temporal para Consulta BD con validación previa
     const [pendingQuery, setPendingQuery] = useState<{ field: ConsultaField; label: string } | null>(null);
@@ -133,8 +139,8 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
         async function loadGoogleServices() {
             try {
                 setOptions({ key: GOOGLE_MAPS_KEY, v: 'weekly' });
-                const placesLib = (await importLibrary('places')) as google.maps.PlacesLibrary;
-                const geocodingLib = (await importLibrary('geocoding')) as google.maps.GeocodingLibrary;
+                const placesLib: any = await importLibrary('places');
+                const geocodingLib: any = await importLibrary('geocoding');
                 if (!mounted) return;
                 autocompleteServiceRef.current = new placesLib.AutocompleteService();
                 geocoderRef.current = new geocodingLib.Geocoder();
@@ -169,18 +175,15 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                     componentRestrictions: { country: 'pe' },
                     language: 'es'
                 },
-                (results, status) => {
+                (results: any[] | null, status: string) => {
                     setIsSearchingPlaces(false);
-                    if (
-                        status === window.google?.maps?.places?.PlacesServiceStatus?.OK &&
-                        results
-                    ) {
+                    if (status === 'OK' && Array.isArray(results)) {
                         setPredictions(
-                            results.slice(0, 5).map((r) => ({
-                                placeId: r.place_id,
-                                mainText: r.structured_formatting.main_text,
-                                secondaryText: r.structured_formatting.secondary_text || '',
-                                fullText: r.description
+                            results.slice(0, 5).map((r: any) => ({
+                                placeId: String(r.place_id || ''),
+                                mainText: String(r.structured_formatting?.main_text || r.description || ''),
+                                secondaryText: String(r.structured_formatting?.secondary_text || ''),
+                                fullText: String(r.description || '')
                             }))
                         );
                     } else {
@@ -194,9 +197,9 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
     }, [inputText, step]);
 
     const extractDistrictFromComponents = (
-        components?: google.maps.GeocoderAddressComponent[]
+        components?: GoogleAddressComponent[]
     ): string => {
-        if (!components) return 'Lima';
+        if (!components || !Array.isArray(components)) return 'Lima';
         const level3 = components.find((c) =>
             c.types.includes('administrative_area_level_3')
         );
@@ -214,30 +217,33 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
         if (!geocoderRef.current) return;
         setIsSearchingPlaces(true);
 
-        geocoderRef.current.geocode({ placeId: item.placeId }, (results, status) => {
-            setIsSearchingPlaces(false);
-            if (status === 'OK' && results && results[0]) {
-                const res = results[0];
-                const distrito = extractDistrictFromComponents(res.address_components);
-                const lat = res.geometry.location.lat().toFixed(6);
-                const lng = res.geometry.location.lng().toFixed(6);
-                const coords = `${lat}, ${lng}`;
+        geocoderRef.current.geocode(
+            { placeId: item.placeId },
+            (results: any[] | null, status: string) => {
+                setIsSearchingPlaces(false);
+                if (status === 'OK' && results && results[0]) {
+                    const res = results[0];
+                    const distrito = extractDistrictFromComponents(res.address_components);
+                    const lat = res.geometry.location.lat().toFixed(6);
+                    const lng = res.geometry.location.lng().toFixed(6);
+                    const coords = `${lat}, ${lng}`;
 
-                setSelectedGoogleLocation({
-                    direccion: item.fullText,
-                    distrito,
-                    coordenadas: coords
-                });
-                setInputText('');
-                setPredictions([]);
+                    setSelectedGoogleLocation({
+                        direccion: item.fullText,
+                        distrito,
+                        coordenadas: coords
+                    });
+                    setInputText('');
+                    setPredictions([]);
 
-                appendInteraction(
-                    item.fullText,
-                    `📍 **Ubicación verificada con Google Maps:**\n• **Distrito:** ${distrito}\n• **Dirección:** ${item.mainText}\n• **GPS:** ${coords}\n\n**Último paso:** Escribe una **referencia o interior/piso** (Ej: Frente al parque, Dpto 302) o toca "Omitir referencia":`,
-                    'vt_dir_referencia'
-                );
+                    appendInteraction(
+                        item.fullText,
+                        `📍 **Ubicación verificada con Google Maps:**\n• **Distrito:** ${distrito}\n• **Dirección:** ${item.mainText}\n• **GPS:** ${coords}\n\n**Último paso:** Escribe una **referencia o interior/piso** (Ej: Frente al parque, Dpto 302) o toca "Confirmar sin referencia":`,
+                        'vt_dir_referencia'
+                    );
+                }
             }
-        });
+        );
     };
 
     const handleUseCurrentGpsLocation = () => {
@@ -253,12 +259,12 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                 if (geocoderRef.current) {
                     geocoderRef.current.geocode(
                         { location: { lat, lng } },
-                        (results, status) => {
+                        (results: any[] | null, status: string) => {
                             setIsGettingGps(false);
                             if (status === 'OK' && results && results[0]) {
                                 const res = results[0];
                                 const distrito = extractDistrictFromComponents(res.address_components);
-                                const formattedAddr = res.formatted_address;
+                                const formattedAddr = String(res.formatted_address || 'Ubicación GPS');
 
                                 setSelectedGoogleLocation({
                                     direccion: formattedAddr,
