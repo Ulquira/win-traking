@@ -546,7 +546,7 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
     };
 
     // ==========================================================================
-    // MÓDULO: REALIZAR UNA CONSULTA (CONEXIÓN A BASE DE DATOS + VALIDACIÓN)
+    // MÓDULO: Verificar datos (CONEXIÓN A BASE DE DATOS + VALIDACIÓN)
     // ==========================================================================
     const handleInitiateConsulta = (field: ConsultaField, label: string) => {
         setPendingQuery({ field, label });
@@ -938,7 +938,7 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                     <div className="grid grid-cols-1 gap-2">
                                         <button
                                             type="button"
-                                            onClick={() => handleMenuVisitaTecnica('ya_no_necesito', 'Ya no necesito ayuda')}
+                                            onClick={() => handleMenuVisitaTecnica('ya_no_necesito', 'Ya no necesito la visita')}
                                             className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer group"
                                         >
                                             <span>Ya no necesito ayuda</span>
@@ -954,7 +954,7 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                         </button>
                                         <button
                                             type="button"
-                                            onClick={() => handleMenuVisitaTecnica('problema_tecnico', 'Problema con un técnico')}
+                                            onClick={() => handleMenuVisitaTecnica('problema_tecnico', 'Problema con el técnico')}
                                             className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer group"
                                         >
                                             <span>Problema con un técnico</span>
@@ -970,10 +970,10 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                         </button>
                                         <button
                                             type="button"
-                                            onClick={() => handleMenuVisitaTecnica('consulta', 'Realizar una consulta')}
+                                            onClick={() => handleMenuVisitaTecnica('consulta', 'Verificar datos')}
                                             className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer group"
                                         >
-                                            <span>Realizar una consulta</span>
+                                            <span>Verificar datos</span>
                                             <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
                                         </button>
                                     </div>
@@ -992,10 +992,10 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                         </button>
                                         <button
                                             type="button"
-                                            onClick={() => handleMenuInstalaciones('consulta', 'Realizar una consulta')}
+                                            onClick={() => handleMenuInstalaciones('consulta', 'Verificar datos')}
                                             className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer group"
                                         >
-                                            <span>Realizar una consulta</span>
+                                            <span>Verificar datos</span>
                                             <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
                                         </button>
                                         <button
@@ -1110,7 +1110,7 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                     </div>
                                 )}
 
-                                {/* MÓDULO: REALIZAR UNA CONSULTA (4 OPCIONES) */}
+                                {/* MÓDULO: Verificar datos (4 OPCIONES) */}
                                 {step === 'mod_realizar_consulta' && (
                                     <div className="flex flex-col gap-2">
                                         <button
