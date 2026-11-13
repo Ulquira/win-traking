@@ -45,8 +45,9 @@ type FlowStep =
     | 'vt_ya_no_necesito'
     | 'vt_input_otro_motivo'
     | 'vt_sin_disponibilidad'
-    | 'vt_dir_google_search'
-    | 'vt_dir_referencia'
+    | 'vt_dir_step1_distrito'
+    | 'vt_dir_step2_direccion'
+    | 'vt_dir_step3_gps'
     // Compartido: Problema con el Técnico
     | 'mod_problema_tecnico'
     | 'mod_input_otro_problema'
@@ -69,22 +70,36 @@ interface ChatBubble {
     fecha_utc?: string;
 }
 
-interface PlacePredictionItem {
-    placeId: string;
-    mainText: string;
-    secondaryText: string;
-    fullText: string;
-}
-
-interface GoogleAddressComponent {
-    long_name: string;
-    short_name: string;
-    types: string[];
-}
-
 const GOOGLE_MAPS_KEY =
     import.meta.env.VITE_GOOGLE_MAPS_API_KEY ||
     "AIzaSyA9aYa76-YBAGlanLejHQ55ipqUxX4vkd8";
+
+const DISTRITOS_BASE_PERU: string[] = [
+    // Lima Metropolitana
+    "Ancón, Lima", "Ate, Lima", "Barranco, Lima", "Breña, Lima", "Carabayllo, Lima",
+    "Cercado de Lima, Lima", "Chaclacayo, Lima", "Chorrillos, Lima", "Cieneguilla, Lima",
+    "Comas, Lima", "El Agustino, Lima", "Independencia, Lima", "Jesús María, Lima",
+    "La Molina, Lima", "La Victoria, Lima", "Lince, Lima", "Los Olivos, Lima",
+    "Lurigancho - Chosica, Lima", "Lurín, Lima", "Magdalena del Mar, Lima",
+    "Miraflores, Lima", "Pachacámac, Lima", "Pucusana, Lima", "Pueblo Libre, Lima",
+    "Puente Piedra, Lima", "Punta Hermosa, Lima", "Punta Negra, Lima", "Rímac, Lima",
+    "San Bartolo, Lima", "San Borja, Lima", "San Isidro, Lima",
+    "San Juan de Lurigancho, Lima", "San Juan de Miraflores, Lima", "San Luis, Lima",
+    "San Martín de Porres, Lima", "San Miguel, Lima", "Santa Anita, Lima",
+    "Santa María del Mar, Lima", "Santa Rosa, Lima", "Santiago de Surco, Lima",
+    "Surquillo, Lima", "Villa El Salvador, Lima", "Villa María del Triunfo, Lima",
+    // Callao
+    "Bellavista, Callao", "Callao, Callao", "Carmen de la Legua Reynoso, Callao",
+    "La Perla, Callao", "La Punta, Callao", "Mi Perú, Callao", "Ventanilla, Callao",
+    // Provincias principales
+    "Arequipa", "Cayma, Arequipa", "Cerro Colorado, Arequipa", "Yanahuara, Arequipa",
+    "Trujillo", "Víctor Larco Herrera, Trujillo", "La Esperanza, Trujillo",
+    "Chiclayo", "José Leonardo Ortiz, Chiclayo", "Piura", "Castilla, Piura",
+    "Veintiséis de Octubre, Piura", "Chimbote", "Nuevo Chimbote", "Huancayo", "Ica", "Cusco"
+];
+
+const normalizeText = (str: string) =>
+    str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 
 export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
     isOpen,
@@ -102,18 +117,15 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
     const [asesorNombre, setAsesorNombre] = useState<string | null>(null);
     const [isSendingLive, setIsSendingLive] = useState(false);
 
-    // Estados para autocompletado Google Maps (Dirección + Distrito + GPS)
-    const [predictions, setPredictions] = useState<PlacePredictionItem[]>([]);
-    const [isSearchingPlaces, setIsSearchingPlaces] = useState(false);
+    // Estados de las 3 Fases de Dirección Incorrecta
+    const [distritoTemp, setDistritoTemp] = useState('');
+    const [direccionTemp, setDireccionTemp] = useState('');
+    const [districtSuggestions, setDistrictSuggestions] = useState<string[]>([]);
+    const [isSearchingDistrict, setIsSearchingDistrict] = useState(false);
+    const [distritoError, setDistritoError] = useState(false);
     const [isGettingGps, setIsGettingGps] = useState(false);
-    const [selectedGoogleLocation, setSelectedGoogleLocation] = useState<{
-        direccion: string;
-        distrito: string;
-        coordenadas: string;
-    } | null>(null);
 
     const autocompleteServiceRef = useRef<any>(null);
-    const geocoderRef = useRef<any>(null);
 
     // Estado temporal para Consulta BD con validación previa
     const [pendingQuery, setPendingQuery] = useState<{ field: ConsultaField; label: string } | null>(null);
@@ -131,200 +143,82 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
             ? String(data.token_inicio).replace(/\D/g, '').slice(0, 4)
             : null;
 
-    // Inicializar librerías de Google Maps (Places + Geocoding) cuando entra al paso de dirección
+    // Cargar Google Places API solo para asistir el autocompletado de distritos en Fase 1
     useEffect(() => {
-        if (!isOpen || step !== 'vt_dir_google_search') return;
+        if (!isOpen || step !== 'vt_dir_step1_distrito') return;
 
         let mounted = true;
-        async function loadGoogleServices() {
+        async function initGooglePlaces() {
             try {
                 setOptions({ key: GOOGLE_MAPS_KEY, v: 'weekly' });
                 const placesLib: any = await importLibrary('places');
-                const geocodingLib: any = await importLibrary('geocoding');
                 if (!mounted) return;
                 autocompleteServiceRef.current = new placesLib.AutocompleteService();
-                geocoderRef.current = new geocodingLib.Geocoder();
             } catch (err) {
-                console.error('Error cargando Google Places:', err);
+                console.error('Fallback a catálogo local de distritos:', err);
             }
         }
-        loadGoogleServices();
+        initGooglePlaces();
         return () => {
             mounted = false;
         };
     }, [isOpen, step]);
 
-    // Buscar sugerencias en tiempo real en Google Maps mientras el usuario escribe
+    // Filtrar distritos combinando catálogo oficial instantáneo + Google Places (tipo: regions)
     useEffect(() => {
-        if (step !== 'vt_dir_google_search') {
-            setPredictions([]);
+        if (step !== 'vt_dir_step1_distrito') {
+            setDistrictSuggestions([]);
             return;
         }
 
-        const query = inputText.trim();
-        if (query.length < 3 || !autocompleteServiceRef.current) {
-            setPredictions([]);
+        const q = inputText.trim();
+        if (!q) {
+            setDistrictSuggestions([
+                "Santiago de Surco, Lima",
+                "San Juan de Lurigancho, Lima",
+                "San Martín de Porres, Lima",
+                "Comas, Lima",
+                "Ventanilla, Callao",
+                "Ate, Lima"
+            ]);
             return;
         }
+
+        const localMatches = DISTRITOS_BASE_PERU.filter((d) =>
+            normalizeText(d).includes(normalizeText(q))
+        ).slice(0, 6);
+
+        setDistrictSuggestions(localMatches);
+
+        if (q.length < 3 || !autocompleteServiceRef.current) return;
 
         const timer = setTimeout(() => {
-            setIsSearchingPlaces(true);
+            setIsSearchingDistrict(true);
             autocompleteServiceRef.current?.getPlacePredictions(
                 {
-                    input: query,
+                    input: q,
                     componentRestrictions: { country: 'pe' },
+                    types: ['(regions)'],
                     language: 'es'
                 },
                 (results: any[] | null, status: string) => {
-                    setIsSearchingPlaces(false);
+                    setIsSearchingDistrict(false);
                     if (status === 'OK' && Array.isArray(results)) {
-                        setPredictions(
-                            results.slice(0, 5).map((r: any) => ({
-                                placeId: String(r.place_id || ''),
-                                mainText: String(r.structured_formatting?.main_text || r.description || ''),
-                                secondaryText: String(r.structured_formatting?.secondary_text || ''),
-                                fullText: String(r.description || '')
-                            }))
+                        const apiNames = results.map((r: any) =>
+                            String(r.description || '')
+                                .replace(/,\s*Perú$/i, '')
+                                .replace(/,\s*Peru$/i, '')
+                                .trim()
                         );
-                    } else {
-                        setPredictions([]);
+                        const merged = Array.from(new Set([...localMatches, ...apiNames])).slice(0, 6);
+                        setDistrictSuggestions(merged);
                     }
                 }
             );
-        }, 280);
+        }, 250);
 
         return () => clearTimeout(timer);
     }, [inputText, step]);
-
-    const extractDistrictFromComponents = (
-        components?: GoogleAddressComponent[]
-    ): string => {
-        if (!components || !Array.isArray(components)) return 'Lima';
-        const level3 = components.find((c) =>
-            c.types.includes('administrative_area_level_3')
-        );
-        if (level3) return level3.long_name;
-        const locality = components.find((c) => c.types.includes('locality'));
-        if (locality) return locality.long_name;
-        const sublocality = components.find((c) =>
-            c.types.includes('sublocality')
-        );
-        if (sublocality) return sublocality.long_name;
-        return 'Lima';
-    };
-
-    const handleSelectGooglePrediction = (item: PlacePredictionItem) => {
-        if (!geocoderRef.current) return;
-        setIsSearchingPlaces(true);
-
-        geocoderRef.current.geocode(
-            { placeId: item.placeId },
-            (results: any[] | null, status: string) => {
-                setIsSearchingPlaces(false);
-                if (status === 'OK' && results && results[0]) {
-                    const res = results[0];
-                    const distrito = extractDistrictFromComponents(res.address_components);
-                    const lat = res.geometry.location.lat().toFixed(6);
-                    const lng = res.geometry.location.lng().toFixed(6);
-                    const coords = `${lat}, ${lng}`;
-
-                    setSelectedGoogleLocation({
-                        direccion: item.fullText,
-                        distrito,
-                        coordenadas: coords
-                    });
-                    setInputText('');
-                    setPredictions([]);
-
-                    appendInteraction(
-                        item.fullText,
-                        `📍 **Ubicación verificada con Google Maps:**\n• **Distrito:** ${distrito}\n• **Dirección:** ${item.mainText}\n• **GPS:** ${coords}\n\n**Último paso:** Escribe una **referencia o interior/piso** (Ej: Frente al parque, Dpto 302) o toca "Confirmar sin referencia":`,
-                        'vt_dir_referencia'
-                    );
-                }
-            }
-        );
-    };
-
-    const handleUseCurrentGpsLocation = () => {
-        if (!('geolocation' in navigator)) return;
-        setIsGettingGps(true);
-
-        navigator.geolocation.getCurrentPosition(
-            (pos) => {
-                const lat = pos.coords.latitude;
-                const lng = pos.coords.longitude;
-                const coords = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
-
-                if (geocoderRef.current) {
-                    geocoderRef.current.geocode(
-                        { location: { lat, lng } },
-                        (results: any[] | null, status: string) => {
-                            setIsGettingGps(false);
-                            if (status === 'OK' && results && results[0]) {
-                                const res = results[0];
-                                const distrito = extractDistrictFromComponents(res.address_components);
-                                const formattedAddr = String(res.formatted_address || 'Ubicación GPS');
-
-                                setSelectedGoogleLocation({
-                                    direccion: formattedAddr,
-                                    distrito,
-                                    coordenadas: coords
-                                });
-                                setInputText('');
-                                setPredictions([]);
-
-                                appendInteraction(
-                                    `Ubicación GPS actual (${formattedAddr})`,
-                                    `📍 **Ubicación detectada por GPS:**\n• **Distrito:** ${distrito}\n• **Dirección:** ${formattedAddr}\n• **GPS:** ${coords}\n\n**Último paso:** Escribe una **referencia o interior/piso** (Ej: Casa rejas negras, piso 2):`,
-                                    'vt_dir_referencia'
-                                );
-                            } else {
-                                setSelectedGoogleLocation({
-                                    direccion: 'Ubicación por GPS',
-                                    distrito: 'Registrado por GPS',
-                                    coordenadas: coords
-                                });
-                                appendInteraction(
-                                    `Ubicación GPS (${coords})`,
-                                    `📍 **Coordenada capturada (${coords}).**\n\nPor favor, escribe tu **dirección exacta y referencia** para completar el registro:`,
-                                    'vt_dir_referencia'
-                                );
-                            }
-                        }
-                    );
-                } else {
-                    setIsGettingGps(false);
-                }
-            },
-            () => {
-                setIsGettingGps(false);
-            },
-            { enableHighAccuracy: true, timeout: 8000 }
-        );
-    };
-
-    const finalizarRegistroDireccionGoogle = (referenciaTexto: string) => {
-        const loc = selectedGoogleLocation;
-        const distritoFinal = loc?.distrito || 'No especificado';
-        const direccionFinal = loc?.direccion || '';
-        const gpsFinal = loc?.coordenadas || 'Omitido';
-        const refLimpia = referenciaTexto.trim() || 'Sin referencia adicional';
-
-        trackEvent('ayuda_vt_guardar_direccion', {
-            token,
-            area: 'Visita Técnica',
-            distrito: distritoFinal,
-            direccion_referencia: `${direccionFinal} | Ref: ${refLimpia}`,
-            coordenada_gps: gpsFinal
-        });
-
-        appendInteraction(
-            referenciaTexto,
-            `✅ **Ubicación actualizada con Google Maps:**\n• **Distrito:** ${distritoFinal}\n• **Dirección:** ${direccionFinal}\n• **Referencia:** ${refLimpia}\n• **Coordenada GPS:** ${gpsFinal}\n\nHemos guardado los datos homologados en tu ticket de Visita Técnica.`,
-            'end_flow'
-        );
-    };
 
     const detectServiceArea = (): AreaOperativa => {
         const tipoLower = (data.tipo || '').toLowerCase().trim();
@@ -375,8 +269,9 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
         setArea(detectedArea);
         setStep(detectedArea === 'Visita Técnica' ? 'menu_visita_tecnica' : 'menu_instalaciones');
         setInputText('');
-        setPredictions([]);
-        setSelectedGoogleLocation(null);
+        setDistritoTemp('');
+        setDireccionTemp('');
+        setDistritoError(false);
         setPendingQuery(null);
         setAsesorNombre(null);
         setMessages([
@@ -575,8 +470,8 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
             case 'direccion':
                 appendInteraction(
                     label,
-                    'Vamos a ubicar tu dirección exacta con **Google Maps**.\n\nEscribe tu **calle, avenida y distrito** para elegirla de la lista (o usa tu GPS actual):',
-                    'vt_dir_google_search',
+                    'Vamos a actualizar la ubicación de tu visita en 3 pasos rápidos.\n\n**Paso 1 de 3:** Busca y selecciona tu **Distrito** en la lista:',
+                    'vt_dir_step1_distrito',
                     'Visita Técnica • Ubicación'
                 );
                 break;
@@ -653,6 +548,58 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
             onClose();
             onOpenReprogram();
         }
+    };
+
+    // FASE 1: Selección de Distrito Homologado
+    const handleSelectDistritoHomologado = (distritoElegido: string) => {
+        setInputText('');
+        setDistritoError(false);
+        setDistritoTemp(distritoElegido);
+        appendInteraction(
+            distritoElegido,
+            `Distrito registrado: **${distritoElegido}**.\n\n**Paso 2 de 3:** Ahora escribe libremente tu **Dirección completa y referencia** (puedes incluir Urb., Mz., Lote, Piso, Interior o color de fachada):`,
+            'vt_dir_step2_direccion'
+        );
+    };
+
+    // FASE 3: Ubicación GPS Opcional
+    const guardarDireccionVisitaTecnica = (gpsCoords: string | null, userLabel: string) => {
+        trackEvent('ayuda_vt_guardar_direccion', {
+            token,
+            area: 'Visita Técnica',
+            distrito: distritoTemp,
+            direccion_referencia: direccionTemp,
+            coordenada_gps: gpsCoords || 'Omitido'
+        });
+
+        appendInteraction(
+            userLabel,
+            `✅ **Ubicación actualizada con éxito:**\n• **Distrito:** ${distritoTemp}\n• **Dirección y ref.:** ${direccionTemp}${
+                gpsCoords ? `\n• **Coordenada GPS:** ${gpsCoords}` : '\n• **Coordenada GPS:** Omitida'
+            }\n\nHemos guardado los datos en tu ticket de Visita Técnica.`,
+            'end_flow'
+        );
+    };
+
+    const handleCaptureGpsOptional = () => {
+        if (!('geolocation' in navigator)) {
+            guardarDireccionVisitaTecnica(null, 'Omitir (GPS no disponible)');
+            return;
+        }
+
+        setIsGettingGps(true);
+        navigator.geolocation.getCurrentPosition(
+            (pos) => {
+                setIsGettingGps(false);
+                const coords = `${pos.coords.latitude.toFixed(6)}, ${pos.coords.longitude.toFixed(6)}`;
+                guardarDireccionVisitaTecnica(coords, `Ubicación GPS confirmada (${coords})`);
+            },
+            () => {
+                setIsGettingGps(false);
+                guardarDireccionVisitaTecnica(null, 'Omitir');
+            },
+            { enableHighAccuracy: true, timeout: 8000 }
+        );
     };
 
     const handleMenuInstalaciones = (opcion: 'problema_tecnico' | 'consulta' | 'asesor', label: string) => {
@@ -867,22 +814,36 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
             return;
         }
 
-        // 2. Buscador Google Maps: si presiona Enter y hay al menos una sugerencia de Google, toma la primera
-        if (step === 'vt_dir_google_search') {
-            if (predictions.length > 0) {
-                handleSelectGooglePrediction(predictions[0]);
+        // 2. FASE 1: Selección de Distrito (Obliga a elegir una sugerencia válida)
+        if (step === 'vt_dir_step1_distrito') {
+            if (districtSuggestions.length > 0) {
+                handleSelectDistritoHomologado(districtSuggestions[0]);
+            } else {
+                setDistritoError(true);
             }
             return;
         }
 
-        // 3. Paso final de Referencia adicional tras elegir ubicación en Google Maps
-        if (step === 'vt_dir_referencia') {
+        // 3. FASE 2: Dirección Libre (Acepta Mz, Lote, Urb, Interior, Referencia)
+        if (step === 'vt_dir_step2_direccion') {
             setInputText('');
-            finalizarRegistroDireccionGoogle(clean);
+            setDireccionTemp(clean);
+            appendInteraction(
+                clean,
+                '**Paso 3 de 3 (Opcional):** Si te encuentras en el lugar de la visita, confirma tu **Ubicación GPS** con el botón de abajo para que el técnico llegue directo, o toca "Omitir":',
+                'vt_dir_step3_gps'
+            );
             return;
         }
 
-        // 4. Módulo Problema con el Técnico -> Otro inconveniente
+        // 4. FASE 3: Si escribe "Omitir" en el paso de GPS
+        if (step === 'vt_dir_step3_gps') {
+            setInputText('');
+            guardarDireccionVisitaTecnica(null, clean);
+            return;
+        }
+
+        // 5. Módulo Problema con el Técnico -> Otro inconveniente
         if (step === 'mod_input_otro_problema') {
             setInputText('');
             const currentArea = area || 'Instalaciones';
@@ -900,7 +861,7 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
             return;
         }
 
-        // 5. Validación antes de consultar en Base de Datos
+        // 6. Validación antes de consultar en Base de Datos
         if (step === 'mod_validar_consulta' && pendingQuery) {
             const cleanDigits = clean.replace(/\D/g, '');
             const phoneLast4 = (data.cliente_telefono || '').replace(/\D/g, '').slice(-4);
@@ -930,7 +891,7 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
             return;
         }
 
-        // 6. Módulo Hablar con un asesor -> Otro motivo
+        // 7. Módulo Hablar con un asesor -> Otro motivo
         if (step === 'mod_input_otro_asesor') {
             setInputText('');
             finalizarDerivacionAsesor(clean);
@@ -941,8 +902,9 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
     const isTextInputVisible =
         step === 'live_chat' ||
         step === 'vt_input_otro_motivo' ||
-        step === 'vt_dir_google_search' ||
-        step === 'vt_dir_referencia' ||
+        step === 'vt_dir_step1_distrito' ||
+        step === 'vt_dir_step2_direccion' ||
+        step === 'vt_dir_step3_gps' ||
         step === 'mod_input_otro_problema' ||
         step === 'mod_validar_consulta' ||
         step === 'mod_input_otro_asesor';
@@ -1198,14 +1160,14 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                     </div>
                                 )}
 
-                                {/* Botón rápido para usar el GPS actual en el buscador de Google Maps */}
-                                {step === 'vt_dir_google_search' && (
-                                    <div className="pt-1">
+                                {/* FASE 3: Botones de Coordenada GPS Opcional */}
+                                {step === 'vt_dir_step3_gps' && (
+                                    <div className="flex flex-col gap-2">
                                         <button
                                             type="button"
                                             disabled={isGettingGps}
-                                            onClick={handleUseCurrentGpsLocation}
-                                            className="w-full bg-[#FFF0E6] hover:bg-[#FFE4D1] border border-[#FFD8C2] text-[#FF5A0A] rounded-xl px-4 py-2.5 text-[12.5px] font-bold flex items-center justify-center gap-2 transition-all cursor-pointer"
+                                            onClick={handleCaptureGpsOptional}
+                                            className="w-full bg-[#FF5A0A] hover:bg-[#E04E07] disabled:opacity-60 text-white rounded-xl px-4 py-3 text-[13px] font-bold flex items-center justify-center gap-2 transition-all shadow-sm cursor-pointer"
                                         >
                                             {isGettingGps ? (
                                                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -1213,21 +1175,16 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                                 <Navigation className="w-4 h-4" />
                                             )}
                                             <span>
-                                                {isGettingGps ? 'Detectando ubicación con GPS...' : 'Usar mi ubicación GPS actual'}
+                                                {isGettingGps ? 'Obteniendo ubicación GPS...' : 'Enviar mi ubicación GPS actual'}
                                             </span>
                                         </button>
-                                    </div>
-                                )}
-
-                                {/* Botón para omitir referencia adicional si ya seleccionó dirección en Google Maps */}
-                                {step === 'vt_dir_referencia' && (
-                                    <div className="pt-1">
                                         <button
                                             type="button"
-                                            onClick={() => finalizarRegistroDireccionGoogle('Sin referencia adicional')}
-                                            className="w-full bg-white hover:bg-gray-50 border border-gray-200 rounded-xl px-4 py-2.5 text-[12.5px] font-semibold text-gray-600 transition-all cursor-pointer text-center"
+                                            disabled={isGettingGps}
+                                            onClick={() => guardarDireccionVisitaTecnica(null, 'Omitir')}
+                                            className="w-full bg-white hover:bg-gray-50 border border-gray-200 rounded-xl px-4 py-2.5 text-[13px] font-semibold text-gray-600 transition-all cursor-pointer text-center"
                                         >
-                                            Confirmar y guardar sin referencia adicional
+                                            Omitir (Guardar sin GPS)
                                         </button>
                                     </div>
                                 )}
@@ -1371,35 +1328,44 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                             <div ref={chatEndRef} />
                         </div>
 
-                        {/* Barra Inferior + Desplegable de Sugerencias de Google Maps */}
+                        {/* Barra Inferior + Autocompletado de Distrito en Fase 1 */}
                         {isTextInputVisible && (
                             <div className="bg-white border-t border-gray-100 shrink-0">
-                                {step === 'vt_dir_google_search' && (predictions.length > 0 || isSearchingPlaces) && (
-                                    <div className="max-h-[190px] overflow-y-auto border-b border-gray-100 bg-white divide-y divide-gray-50">
-                                        {isSearchingPlaces && predictions.length === 0 && (
-                                            <div className="px-4 py-2.5 text-[12px] text-gray-400 flex items-center gap-2">
-                                                <Loader2 className="w-3.5 h-3.5 animate-spin text-[#FF5A0A]" />
-                                                <span>Buscando en Google Maps...</span>
+                                {step === 'vt_dir_step1_distrito' && (
+                                    <div className="px-3 pt-2.5 pb-1.5 bg-[#F8F9FB] border-b border-gray-100">
+                                        <div className="flex items-center justify-between mb-1.5 px-1">
+                                            <span className="text-[11px] font-semibold text-gray-500 flex items-center gap-1.5">
+                                                <MapPin className="w-3.5 h-3.5 text-[#FF5A0A]" />
+                                                {inputText.trim() ? 'Selecciona tu distrito:' : 'Distritos sugeridos:'}
+                                                {isSearchingDistrict && (
+                                                    <Loader2 className="w-3 h-3 animate-spin text-[#FF5A0A]" />
+                                                )}
+                                            </span>
+                                            {distritoError && (
+                                                <span className="text-[11px] font-bold text-rose-600">
+                                                    Elige un distrito de la lista
+                                                </span>
+                                            )}
+                                        </div>
+
+                                        {districtSuggestions.length > 0 ? (
+                                            <div className="flex flex-wrap gap-1.5 max-h-[120px] overflow-y-auto pb-1">
+                                                {districtSuggestions.map((dist) => (
+                                                    <button
+                                                        key={dist}
+                                                        type="button"
+                                                        onClick={() => handleSelectDistritoHomologado(dist)}
+                                                        className="px-3 py-1.5 rounded-full bg-white hover:bg-[#FFF0E6] active:scale-95 border border-gray-200 hover:border-[#FF5A0A] text-[12px] font-semibold text-[#26292E] hover:text-[#FF5A0A] transition-all cursor-pointer shadow-2xs"
+                                                    >
+                                                        {dist}
+                                                    </button>
+                                                ))}
                                             </div>
+                                        ) : (
+                                            <p className="text-[12px] text-gray-400 py-1 px-1">
+                                                No encontramos ese distrito. Verifica cómo está escrito.
+                                            </p>
                                         )}
-                                        {predictions.map((item) => (
-                                            <button
-                                                key={item.placeId}
-                                                type="button"
-                                                onClick={() => handleSelectGooglePrediction(item)}
-                                                className="w-full px-4 py-2.5 text-left hover:bg-[#FFF6ED] flex items-start gap-2.5 transition-colors cursor-pointer group"
-                                            >
-                                                <MapPin className="w-4 h-4 text-[#FF5A0A] shrink-0 mt-0.5" />
-                                                <div className="min-w-0 flex-1">
-                                                    <p className="text-[13px] font-bold text-[#26292E] group-hover:text-[#FF5A0A] truncate">
-                                                        {item.mainText}
-                                                    </p>
-                                                    <p className="text-[11px] text-gray-500 truncate">
-                                                        {item.secondaryText}
-                                                    </p>
-                                                </div>
-                                            </button>
-                                        ))}
                                     </div>
                                 )}
 
@@ -1411,19 +1377,28 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                         type="text"
                                         autoFocus
                                         value={inputText}
-                                        onChange={(e) => setInputText(e.target.value)}
+                                        onChange={(e) => {
+                                            setInputText(e.target.value);
+                                            if (distritoError) setDistritoError(false);
+                                        }}
                                         placeholder={
                                             step === 'live_chat'
                                                 ? 'Escribe tu mensaje para el asesor...'
-                                                : step === 'vt_dir_google_search'
-                                                    ? 'Busca tu dirección en Google Maps (Ej: Av. Javier Prado 123)...'
-                                                    : step === 'vt_dir_referencia'
-                                                        ? 'Escribe piso, interior o referencia...'
-                                                        : step === 'mod_validar_consulta'
-                                                            ? 'Ingresa tu PIN de 4 dígitos...'
-                                                            : 'Escribe el detalle aquí...'
+                                                : step === 'vt_dir_step1_distrito'
+                                                    ? 'Escribe y elige tu distrito (Ej: Ventanilla, Surco)...'
+                                                    : step === 'vt_dir_step2_direccion'
+                                                        ? 'Ej: Urb. Pedro Cueva Mz P1 Lt 3 Piso 1 Dpto H...'
+                                                        : step === 'vt_dir_step3_gps'
+                                                            ? 'Escribe "Omitir" o usa los botones de arriba...'
+                                                            : step === 'mod_validar_consulta'
+                                                                ? 'Ingresa tu PIN de 4 dígitos...'
+                                                                : 'Escribe el detalle aquí...'
                                         }
-                                        className="flex-1 h-11 bg-[#F5F6F8] border border-gray-200 rounded-full px-4 text-[13px] text-[#26292E] focus:outline-none focus:border-[#FF5A0A]"
+                                        className={`flex-1 h-11 bg-[#F5F6F8] border rounded-full px-4 text-[13px] text-[#26292E] focus:outline-none transition-colors ${
+                                            distritoError
+                                                ? 'border-rose-400 focus:border-rose-500 bg-rose-50/30'
+                                                : 'border-gray-200 focus:border-[#FF5A0A]'
+                                        }`}
                                     />
                                     <button
                                         type="submit"
