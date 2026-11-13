@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { setOptions, importLibrary } from "@googlemaps/js-api-loader";
 import {
     X,
     RotateCcw,
@@ -10,7 +11,9 @@ import {
     CalendarDays,
     Navigation,
     ChevronRight,
-    ShieldCheck
+    ShieldCheck,
+    MapPin,
+    Loader2
 } from "lucide-react";
 import { InstalacionData } from "@/types/tracking";
 import {
@@ -42,9 +45,8 @@ type FlowStep =
     | 'vt_ya_no_necesito'
     | 'vt_input_otro_motivo'
     | 'vt_sin_disponibilidad'
-    | 'vt_dir_step1_distrito'
-    | 'vt_dir_step2_direccion'
-    | 'vt_dir_step3_gps'
+    | 'vt_dir_google_search'
+    | 'vt_dir_referencia'
     // Compartido: Problema con el Técnico
     | 'mod_problema_tecnico'
     | 'mod_input_otro_problema'
@@ -67,6 +69,17 @@ interface ChatBubble {
     fecha_utc?: string;
 }
 
+interface PlacePredictionItem {
+    placeId: string;
+    mainText: string;
+    secondaryText: string;
+    fullText: string;
+}
+
+const GOOGLE_MAPS_KEY =
+    import.meta.env.VITE_GOOGLE_MAPS_API_KEY ||
+    "AIzaSyA9aYa76-YBAGlanLejHQ55ipqUxX4vkd8";
+
 export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
     isOpen,
     onClose,
@@ -83,10 +96,18 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
     const [asesorNombre, setAsesorNombre] = useState<string | null>(null);
     const [isSendingLive, setIsSendingLive] = useState(false);
 
-    // Estados temporales para Dirección Incorrecta (Secuencial 1 -> 2 -> 3)
-    const [distritoTemp, setDistritoTemp] = useState('');
-    const [direccionTemp, setDireccionTemp] = useState('');
+    // Estados para autocompletado Google Maps (Dirección + Distrito + GPS)
+    const [predictions, setPredictions] = useState<PlacePredictionItem[]>([]);
+    const [isSearchingPlaces, setIsSearchingPlaces] = useState(false);
     const [isGettingGps, setIsGettingGps] = useState(false);
+    const [selectedGoogleLocation, setSelectedGoogleLocation] = useState<{
+        direccion: string;
+        distrito: string;
+        coordenadas: string;
+    } | null>(null);
+
+    const autocompleteServiceRef = useRef<google.maps.places.AutocompleteService | null>(null);
+    const geocoderRef = useRef<google.maps.Geocoder | null>(null);
 
     // Estado temporal para Consulta BD con validación previa
     const [pendingQuery, setPendingQuery] = useState<{ field: ConsultaField; label: string } | null>(null);
@@ -104,7 +125,201 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
             ? String(data.token_inicio).replace(/\D/g, '').slice(0, 4)
             : null;
 
-    // Detectar automáticamente el área según el tipo de servicio de la orden
+    // Inicializar librerías de Google Maps (Places + Geocoding) cuando entra al paso de dirección
+    useEffect(() => {
+        if (!isOpen || step !== 'vt_dir_google_search') return;
+
+        let mounted = true;
+        async function loadGoogleServices() {
+            try {
+                setOptions({ key: GOOGLE_MAPS_KEY, v: 'weekly' });
+                const placesLib = (await importLibrary('places')) as google.maps.PlacesLibrary;
+                const geocodingLib = (await importLibrary('geocoding')) as google.maps.GeocodingLibrary;
+                if (!mounted) return;
+                autocompleteServiceRef.current = new placesLib.AutocompleteService();
+                geocoderRef.current = new geocodingLib.Geocoder();
+            } catch (err) {
+                console.error('Error cargando Google Places:', err);
+            }
+        }
+        loadGoogleServices();
+        return () => {
+            mounted = false;
+        };
+    }, [isOpen, step]);
+
+    // Buscar sugerencias en tiempo real en Google Maps mientras el usuario escribe
+    useEffect(() => {
+        if (step !== 'vt_dir_google_search') {
+            setPredictions([]);
+            return;
+        }
+
+        const query = inputText.trim();
+        if (query.length < 3 || !autocompleteServiceRef.current) {
+            setPredictions([]);
+            return;
+        }
+
+        const timer = setTimeout(() => {
+            setIsSearchingPlaces(true);
+            autocompleteServiceRef.current?.getPlacePredictions(
+                {
+                    input: query,
+                    componentRestrictions: { country: 'pe' },
+                    language: 'es'
+                },
+                (results, status) => {
+                    setIsSearchingPlaces(false);
+                    if (
+                        status === window.google?.maps?.places?.PlacesServiceStatus?.OK &&
+                        results
+                    ) {
+                        setPredictions(
+                            results.slice(0, 5).map((r) => ({
+                                placeId: r.place_id,
+                                mainText: r.structured_formatting.main_text,
+                                secondaryText: r.structured_formatting.secondary_text || '',
+                                fullText: r.description
+                            }))
+                        );
+                    } else {
+                        setPredictions([]);
+                    }
+                }
+            );
+        }, 280);
+
+        return () => clearTimeout(timer);
+    }, [inputText, step]);
+
+    const extractDistrictFromComponents = (
+        components?: google.maps.GeocoderAddressComponent[]
+    ): string => {
+        if (!components) return 'Lima';
+        const level3 = components.find((c) =>
+            c.types.includes('administrative_area_level_3')
+        );
+        if (level3) return level3.long_name;
+        const locality = components.find((c) => c.types.includes('locality'));
+        if (locality) return locality.long_name;
+        const sublocality = components.find((c) =>
+            c.types.includes('sublocality')
+        );
+        if (sublocality) return sublocality.long_name;
+        return 'Lima';
+    };
+
+    const handleSelectGooglePrediction = (item: PlacePredictionItem) => {
+        if (!geocoderRef.current) return;
+        setIsSearchingPlaces(true);
+
+        geocoderRef.current.geocode({ placeId: item.placeId }, (results, status) => {
+            setIsSearchingPlaces(false);
+            if (status === 'OK' && results && results[0]) {
+                const res = results[0];
+                const distrito = extractDistrictFromComponents(res.address_components);
+                const lat = res.geometry.location.lat().toFixed(6);
+                const lng = res.geometry.location.lng().toFixed(6);
+                const coords = `${lat}, ${lng}`;
+
+                setSelectedGoogleLocation({
+                    direccion: item.fullText,
+                    distrito,
+                    coordenadas: coords
+                });
+                setInputText('');
+                setPredictions([]);
+
+                appendInteraction(
+                    item.fullText,
+                    `📍 **Ubicación verificada con Google Maps:**\n• **Distrito:** ${distrito}\n• **Dirección:** ${item.mainText}\n• **GPS:** ${coords}\n\n**Último paso:** Escribe una **referencia o interior/piso** (Ej: Frente al parque, Dpto 302) o toca "Omitir referencia":`,
+                    'vt_dir_referencia'
+                );
+            }
+        });
+    };
+
+    const handleUseCurrentGpsLocation = () => {
+        if (!('geolocation' in navigator)) return;
+        setIsGettingGps(true);
+
+        navigator.geolocation.getCurrentPosition(
+            (pos) => {
+                const lat = pos.coords.latitude;
+                const lng = pos.coords.longitude;
+                const coords = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+
+                if (geocoderRef.current) {
+                    geocoderRef.current.geocode(
+                        { location: { lat, lng } },
+                        (results, status) => {
+                            setIsGettingGps(false);
+                            if (status === 'OK' && results && results[0]) {
+                                const res = results[0];
+                                const distrito = extractDistrictFromComponents(res.address_components);
+                                const formattedAddr = res.formatted_address;
+
+                                setSelectedGoogleLocation({
+                                    direccion: formattedAddr,
+                                    distrito,
+                                    coordenadas: coords
+                                });
+                                setInputText('');
+                                setPredictions([]);
+
+                                appendInteraction(
+                                    `Ubicación GPS actual (${formattedAddr})`,
+                                    `📍 **Ubicación detectada por GPS:**\n• **Distrito:** ${distrito}\n• **Dirección:** ${formattedAddr}\n• **GPS:** ${coords}\n\n**Último paso:** Escribe una **referencia o interior/piso** (Ej: Casa rejas negras, piso 2):`,
+                                    'vt_dir_referencia'
+                                );
+                            } else {
+                                setSelectedGoogleLocation({
+                                    direccion: 'Ubicación por GPS',
+                                    distrito: 'Registrado por GPS',
+                                    coordenadas: coords
+                                });
+                                appendInteraction(
+                                    `Ubicación GPS (${coords})`,
+                                    `📍 **Coordenada capturada (${coords}).**\n\nPor favor, escribe tu **dirección exacta y referencia** para completar el registro:`,
+                                    'vt_dir_referencia'
+                                );
+                            }
+                        }
+                    );
+                } else {
+                    setIsGettingGps(false);
+                }
+            },
+            () => {
+                setIsGettingGps(false);
+            },
+            { enableHighAccuracy: true, timeout: 8000 }
+        );
+    };
+
+    const finalizarRegistroDireccionGoogle = (referenciaTexto: string) => {
+        const loc = selectedGoogleLocation;
+        const distritoFinal = loc?.distrito || 'No especificado';
+        const direccionFinal = loc?.direccion || '';
+        const gpsFinal = loc?.coordenadas || 'Omitido';
+        const refLimpia = referenciaTexto.trim() || 'Sin referencia adicional';
+
+        trackEvent('ayuda_vt_guardar_direccion', {
+            token,
+            area: 'Visita Técnica',
+            distrito: distritoFinal,
+            direccion_referencia: `${direccionFinal} | Ref: ${refLimpia}`,
+            coordenada_gps: gpsFinal
+        });
+
+        appendInteraction(
+            referenciaTexto,
+            `✅ **Ubicación actualizada con Google Maps:**\n• **Distrito:** ${distritoFinal}\n• **Dirección:** ${direccionFinal}\n• **Referencia:** ${refLimpia}\n• **Coordenada GPS:** ${gpsFinal}\n\nHemos guardado los datos homologados en tu ticket de Visita Técnica.`,
+            'end_flow'
+        );
+    };
+
     const detectServiceArea = (): AreaOperativa => {
         const tipoLower = (data.tipo || '').toLowerCase().trim();
         const srvUpper = (data.tipo_servicio || '').toUpperCase().trim();
@@ -154,8 +369,8 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
         setArea(detectedArea);
         setStep(detectedArea === 'Visita Técnica' ? 'menu_visita_tecnica' : 'menu_instalaciones');
         setInputText('');
-        setDistritoTemp('');
-        setDireccionTemp('');
+        setPredictions([]);
+        setSelectedGoogleLocation(null);
         setPendingQuery(null);
         setAsesorNombre(null);
         setMessages([
@@ -203,7 +418,6 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
         }
     }, [isOpen]);
 
-    // Polling cada 3 segundos solo cuando está en modo Live Chat con asesor
     useEffect(() => {
         if (!isOpen || step !== 'live_chat' || !chatId || !token) return;
 
@@ -319,9 +533,6 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
         setStep(nextStep);
     };
 
-    // ==========================================================================
-    // PASO 1: SEGMENTACIÓN INICIAL POR ÁREA (1. Visita Técnica | 2. Instalaciones)
-    // ==========================================================================
     const handleSelectArea = (selectedArea: AreaOperativa, label: string) => {
         setArea(selectedArea);
         trackEvent('ayuda_segmentacion_area', { token, area: selectedArea });
@@ -343,9 +554,6 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
         }
     };
 
-    // ==========================================================================
-    // ÁREA A: SUBMENÚ Y FLUJOS DE VISITA TÉCNICA
-    // ==========================================================================
     const handleMenuVisitaTecnica = (opcion: 'ya_no_necesito' | 'direccion' | 'problema_tecnico' | 'asesor' | 'consulta', label: string) => {
         trackEvent('ayuda_opcion_visita_tecnica', { token, area: 'Visita Técnica', opcion });
 
@@ -361,8 +569,8 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
             case 'direccion':
                 appendInteraction(
                     label,
-                    'Vamos a actualizar la ubicación de tu visita paso a paso.\n\n**Paso 1 de 3:** Por favor, escribe el **Distrito** correcto:',
-                    'vt_dir_step1_distrito',
+                    'Vamos a ubicar tu dirección exacta con **Google Maps**.\n\nEscribe tu **calle, avenida y distrito** para elegirla de la lista (o usa tu GPS actual):',
+                    'vt_dir_google_search',
                     'Visita Técnica • Ubicación'
                 );
                 break;
@@ -441,48 +649,6 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
         }
     };
 
-    // Paso 3 de Dirección Incorrecta (Coordenada GPS Opcional)
-    const guardarDireccionVisitaTecnica = (gpsCoords: string | null, userLabel: string) => {
-        trackEvent('ayuda_vt_guardar_direccion', {
-            token,
-            area: 'Visita Técnica',
-            distrito: distritoTemp,
-            direccion_referencia: direccionTemp,
-            coordenada_gps: gpsCoords || 'Omitido'
-        });
-
-        appendInteraction(
-            userLabel,
-            `✅ **Ubicación actualizada con éxito:**\n• **Distrito:** ${toTitleCase(distritoTemp)}\n• **Dirección y ref.:** ${direccionTemp}${gpsCoords ? `\n• **Coordenada GPS:** ${gpsCoords}` : '\n• **Coordenada GPS:** Omitida'
-            }\n\nHemos guardado los datos en tu ticket de Visita Técnica.`,
-            'end_flow'
-        );
-    };
-
-    const handleCaptureGpsOptional = () => {
-        if (!('geolocation' in navigator)) {
-            guardarDireccionVisitaTecnica(null, 'Omitir (GPS no disponible)');
-            return;
-        }
-
-        setIsGettingGps(true);
-        navigator.geolocation.getCurrentPosition(
-            (pos) => {
-                setIsGettingGps(false);
-                const coords = `${pos.coords.latitude.toFixed(6)}, ${pos.coords.longitude.toFixed(6)}`;
-                guardarDireccionVisitaTecnica(coords, `Confirmar Coordenada GPS (${coords})`);
-            },
-            () => {
-                setIsGettingGps(false);
-                guardarDireccionVisitaTecnica(null, 'Omitir');
-            },
-            { enableHighAccuracy: true, timeout: 8000 }
-        );
-    };
-
-    // ==========================================================================
-    // ÁREA B: SUBMENÚ Y FLUJOS DE INSTALACIONES
-    // ==========================================================================
     const handleMenuInstalaciones = (opcion: 'problema_tecnico' | 'consulta' | 'asesor', label: string) => {
         trackEvent('ayuda_opcion_instalaciones', { token, area: 'Instalaciones', opcion });
 
@@ -514,9 +680,6 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
         }
     };
 
-    // ==========================================================================
-    // MÓDULO COMPARTIDO: Problema con el Técnico
-    // ==========================================================================
     const handleSelectProblemaTecnico = (inconveniente: string, isOtro = false) => {
         const currentArea = area || 'Instalaciones';
         if (isOtro) {
@@ -545,9 +708,6 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
         );
     };
 
-    // ==========================================================================
-    // MÓDULO: Verificar datos (CONEXIÓN A BASE DE DATOS + VALIDACIÓN)
-    // ==========================================================================
     const handleInitiateConsulta = (field: ConsultaField, label: string) => {
         setPendingQuery({ field, label });
         const promptMsg = expectedPin
@@ -605,9 +765,6 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
         setPendingQuery(null);
     };
 
-    // ==========================================================================
-    // MÓDULO COMPARTIDO: HABLAR CON UN ASESOR (EN VIVO DESDE EL MISMO CHAT)
-    // ==========================================================================
     const finalizarDerivacionAsesor = (motivo: string) => {
         const currentArea: AreaOperativa = area || (data.tipo === 'ticket' ? 'Visita Técnica' : 'Instalaciones');
 
@@ -639,9 +796,6 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
         finalizarDerivacionAsesor(motivo);
     };
 
-    // ==========================================================================
-    // MANEJO DE CAMPOS ABIERTOS DE TEXTO (SECUENCIALES, DETALLES Y LIVE CHAT)
-    // ==========================================================================
     const handleTextSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         const clean = inputText.trim();
@@ -707,38 +861,22 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
             return;
         }
 
-        // 2. Exclusivo Visita Técnica: "Dirección incorrecta" (Paso 1 -> Distrito)
-        if (step === 'vt_dir_step1_distrito') {
-            setInputText('');
-            setDistritoTemp(clean);
-            appendInteraction(
-                clean,
-                `Distrito registrado: **${toTitleCase(clean)}**.\n\n**Paso 2 de 3:** Ahora escribe tu **Dirección correcta y referencia**:`,
-                'vt_dir_step2_direccion'
-            );
+        // 2. Buscador Google Maps: si presiona Enter y hay al menos una sugerencia de Google, toma la primera
+        if (step === 'vt_dir_google_search') {
+            if (predictions.length > 0) {
+                handleSelectGooglePrediction(predictions[0]);
+            }
             return;
         }
 
-        // 3. Exclusivo Visita Técnica: "Dirección incorrecta" (Paso 2 -> Dirección y referencia)
-        if (step === 'vt_dir_step2_direccion') {
+        // 3. Paso final de Referencia adicional tras elegir ubicación en Google Maps
+        if (step === 'vt_dir_referencia') {
             setInputText('');
-            setDireccionTemp(clean);
-            appendInteraction(
-                clean,
-                '**Paso 3 de 3 (Opcional):** ¿Deseas confirmar tu **Coordenada GPS** actual? Este paso es totalmente **OPCIONAL** (puedes tocar o escribir "Omitir").',
-                'vt_dir_step3_gps'
-            );
+            finalizarRegistroDireccionGoogle(clean);
             return;
         }
 
-        // 4. Si en el Paso 3 de GPS el usuario escribe "Omitir" manualmente
-        if (step === 'vt_dir_step3_gps') {
-            setInputText('');
-            guardarDireccionVisitaTecnica(null, clean);
-            return;
-        }
-
-        // 5. Módulo Problema con el Técnico -> Otro inconveniente
+        // 4. Módulo Problema con el Técnico -> Otro inconveniente
         if (step === 'mod_input_otro_problema') {
             setInputText('');
             const currentArea = area || 'Instalaciones';
@@ -756,7 +894,7 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
             return;
         }
 
-        // 6. Validación antes de consultar en Base de Datos
+        // 5. Validación antes de consultar en Base de Datos
         if (step === 'mod_validar_consulta' && pendingQuery) {
             const cleanDigits = clean.replace(/\D/g, '');
             const phoneLast4 = (data.cliente_telefono || '').replace(/\D/g, '').slice(-4);
@@ -786,7 +924,7 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
             return;
         }
 
-        // 7. Módulo Hablar con un asesor -> Otro motivo
+        // 6. Módulo Hablar con un asesor -> Otro motivo
         if (step === 'mod_input_otro_asesor') {
             setInputText('');
             finalizarDerivacionAsesor(clean);
@@ -797,9 +935,8 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
     const isTextInputVisible =
         step === 'live_chat' ||
         step === 'vt_input_otro_motivo' ||
-        step === 'vt_dir_step1_distrito' ||
-        step === 'vt_dir_step2_direccion' ||
-        step === 'vt_dir_step3_gps' ||
+        step === 'vt_dir_google_search' ||
+        step === 'vt_dir_referencia' ||
         step === 'mod_input_otro_problema' ||
         step === 'mod_validar_consulta' ||
         step === 'mod_input_otro_asesor';
@@ -911,7 +1048,6 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
 
                             {/* CONTROLES INTERACTIVOS POR PASO */}
                             <div className="pt-1 space-y-2">
-                                {/* PASO 1: SEGMENTACIÓN INICIAL (Únicamente 2 opciones) */}
                                 {step === 'step1_area' && (
                                     <div className="grid grid-cols-1 gap-2.5">
                                         <button
@@ -933,7 +1069,6 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                     </div>
                                 )}
 
-                                {/* ÁREA A: SUBMENÚ VISITA TÉCNICA */}
                                 {step === 'menu_visita_tecnica' && (
                                     <div className="grid grid-cols-1 gap-2">
                                         <button
@@ -979,7 +1114,6 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                     </div>
                                 )}
 
-                                {/* ÁREA B: SUBMENÚ INSTALACIONES (Únicamente 3 opciones estrictas) */}
                                 {step === 'menu_instalaciones' && (
                                     <div className="grid grid-cols-1 gap-2">
                                         <button
@@ -1009,7 +1143,6 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                     </div>
                                 )}
 
-                                {/* FLUJO VISITA TÉCNICA: Ya no necesito la visita */}
                                 {step === 'vt_ya_no_necesito' && (
                                     <div className="flex flex-col gap-2">
                                         <button
@@ -1036,7 +1169,6 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                     </div>
                                 )}
 
-                                {/* FLUJO VISITA TÉCNICA: NO TENGO DISPONIBILIDAD */}
                                 {step === 'vt_sin_disponibilidad' && (
                                     <div className="flex flex-col gap-2">
                                         <button
@@ -1060,30 +1192,40 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                     </div>
                                 )}
 
-                                {/* FLUJO VISITA TÉCNICA: DIRECCIÓN INCORRECTA PASO 3 (GPS OPCIONAL) */}
-                                {step === 'vt_dir_step3_gps' && (
-                                    <div className="flex flex-col gap-2">
+                                {/* Botón rápido para usar el GPS actual en el buscador de Google Maps */}
+                                {step === 'vt_dir_google_search' && (
+                                    <div className="pt-1">
                                         <button
                                             type="button"
                                             disabled={isGettingGps}
-                                            onClick={handleCaptureGpsOptional}
-                                            className="w-full bg-[#FF5A0A] hover:bg-[#E04E07] disabled:opacity-60 text-white rounded-xl px-4 py-3 text-[13px] font-bold flex items-center justify-center gap-2 transition-all shadow-sm cursor-pointer"
+                                            onClick={handleUseCurrentGpsLocation}
+                                            className="w-full bg-[#FFF0E6] hover:bg-[#FFE4D1] border border-[#FFD8C2] text-[#FF5A0A] rounded-xl px-4 py-2.5 text-[12.5px] font-bold flex items-center justify-center gap-2 transition-all cursor-pointer"
                                         >
-                                            <Navigation className="w-4 h-4" />
-                                            <span>{isGettingGps ? 'Obteniendo ubicación GPS...' : 'Confirmar Coordenada GPS'}</span>
-                                        </button>
-                                        <button
-                                            type="button"
-                                            disabled={isGettingGps}
-                                            onClick={() => guardarDireccionVisitaTecnica(null, 'Omitir')}
-                                            className="w-full bg-white hover:bg-gray-50 border border-gray-200 rounded-xl px-4 py-2.5 text-[13px] font-semibold text-gray-600 transition-all cursor-pointer text-center"
-                                        >
-                                            Omitir (Guardar sin GPS)
+                                            {isGettingGps ? (
+                                                <Loader2 className="w-4 h-4 animate-spin" />
+                                            ) : (
+                                                <Navigation className="w-4 h-4" />
+                                            )}
+                                            <span>
+                                                {isGettingGps ? 'Detectando ubicación con GPS...' : 'Usar mi ubicación GPS actual'}
+                                            </span>
                                         </button>
                                     </div>
                                 )}
 
-                                {/* MÓDULO COMPARTIDO: Problema con el Técnico */}
+                                {/* Botón para omitir referencia adicional si ya seleccionó dirección en Google Maps */}
+                                {step === 'vt_dir_referencia' && (
+                                    <div className="pt-1">
+                                        <button
+                                            type="button"
+                                            onClick={() => finalizarRegistroDireccionGoogle('Sin referencia adicional')}
+                                            className="w-full bg-white hover:bg-gray-50 border border-gray-200 rounded-xl px-4 py-2.5 text-[12.5px] font-semibold text-gray-600 transition-all cursor-pointer text-center"
+                                        >
+                                            Confirmar y guardar sin referencia adicional
+                                        </button>
+                                    </div>
+                                )}
+
                                 {step === 'mod_problema_tecnico' && (
                                     <div className="flex flex-col gap-2">
                                         {[
@@ -1110,7 +1252,6 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                     </div>
                                 )}
 
-                                {/* MÓDULO: Verificar datos (4 OPCIONES) */}
                                 {step === 'mod_realizar_consulta' && (
                                     <div className="flex flex-col gap-2">
                                         <button
@@ -1153,7 +1294,6 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                     </div>
                                 )}
 
-                                {/* Botón rápido de validación si el cliente ya está autenticado con su link único */}
                                 {step === 'mod_validar_consulta' && pendingQuery && (
                                     <div className="pt-1">
                                         <button
@@ -1161,7 +1301,7 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                             onClick={() =>
                                                 ejecutarConsultaBaseDeDatos(
                                                     pendingQuery.field,
-                                                    expectedPin || ' Enlace Único Verificado'
+                                                    expectedPin || 'Enlace Único Verificado'
                                                 )
                                             }
                                             className="w-full bg-[#FFF6ED] hover:bg-[#FFEFE0] border border-[#FFD8C2] text-[#FF5A0A] rounded-xl px-4 py-2.5 text-[12px] font-bold flex items-center justify-center gap-2 transition-all cursor-pointer"
@@ -1172,7 +1312,6 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                     </div>
                                 )}
 
-                                {/* MÓDULO COMPARTIDO: HABLAR CON UN ASESOR */}
                                 {step === 'mod_hablar_asesor' && (
                                     <div className="flex flex-col gap-2">
                                         {[
@@ -1201,7 +1340,6 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                     </div>
                                 )}
 
-                                {/* FIN DEL FLUJO */}
                                 {step === 'end_flow' && (
                                     <div className="pt-2 flex flex-col gap-2">
                                         <button
@@ -1227,40 +1365,69 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                             <div ref={chatEndRef} />
                         </div>
 
-                        {/* Barra de Entrada de Texto (Visible en campos abiertos, validación y live_chat) */}
+                        {/* Barra Inferior + Desplegable de Sugerencias de Google Maps */}
                         {isTextInputVisible && (
-                            <form
-                                onSubmit={handleTextSubmit}
-                                className="bg-white p-3 border-t border-gray-100 flex items-center gap-2 shrink-0"
-                            >
-                                <input
-                                    type="text"
-                                    autoFocus
-                                    value={inputText}
-                                    onChange={(e) => setInputText(e.target.value)}
-                                    placeholder={
-                                        step === 'live_chat'
-                                            ? 'Escribe tu mensaje para el asesor...'
-                                            : step === 'vt_dir_step1_distrito'
-                                                ? 'Escribe el distrito (Ej: Surco, San Isidro)...'
-                                                : step === 'vt_dir_step2_direccion'
-                                                    ? 'Escribe la dirección exacta y referencia...'
-                                                    : step === 'vt_dir_step3_gps'
-                                                        ? 'Escribe "Omitir" o usa los botones de arriba...'
+                            <div className="bg-white border-t border-gray-100 shrink-0">
+                                {step === 'vt_dir_google_search' && (predictions.length > 0 || isSearchingPlaces) && (
+                                    <div className="max-h-[190px] overflow-y-auto border-b border-gray-100 bg-white divide-y divide-gray-50">
+                                        {isSearchingPlaces && predictions.length === 0 && (
+                                            <div className="px-4 py-2.5 text-[12px] text-gray-400 flex items-center gap-2">
+                                                <Loader2 className="w-3.5 h-3.5 animate-spin text-[#FF5A0A]" />
+                                                <span>Buscando en Google Maps...</span>
+                                            </div>
+                                        )}
+                                        {predictions.map((item) => (
+                                            <button
+                                                key={item.placeId}
+                                                type="button"
+                                                onClick={() => handleSelectGooglePrediction(item)}
+                                                className="w-full px-4 py-2.5 text-left hover:bg-[#FFF6ED] flex items-start gap-2.5 transition-colors cursor-pointer group"
+                                            >
+                                                <MapPin className="w-4 h-4 text-[#FF5A0A] shrink-0 mt-0.5" />
+                                                <div className="min-w-0 flex-1">
+                                                    <p className="text-[13px] font-bold text-[#26292E] group-hover:text-[#FF5A0A] truncate">
+                                                        {item.mainText}
+                                                    </p>
+                                                    <p className="text-[11px] text-gray-500 truncate">
+                                                        {item.secondaryText}
+                                                    </p>
+                                                </div>
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+
+                                <form
+                                    onSubmit={handleTextSubmit}
+                                    className="p-3 flex items-center gap-2"
+                                >
+                                    <input
+                                        type="text"
+                                        autoFocus
+                                        value={inputText}
+                                        onChange={(e) => setInputText(e.target.value)}
+                                        placeholder={
+                                            step === 'live_chat'
+                                                ? 'Escribe tu mensaje para el asesor...'
+                                                : step === 'vt_dir_google_search'
+                                                    ? 'Busca tu dirección en Google Maps (Ej: Av. Javier Prado 123)...'
+                                                    : step === 'vt_dir_referencia'
+                                                        ? 'Escribe piso, interior o referencia...'
                                                         : step === 'mod_validar_consulta'
                                                             ? 'Ingresa tu PIN de 4 dígitos...'
                                                             : 'Escribe el detalle aquí...'
-                                    }
-                                    className="flex-1 h-11 bg-[#F5F6F8] border border-gray-200 rounded-full px-4 text-[13px] text-[#26292E] focus:outline-none focus:border-[#FF5A0A]"
-                                />
-                                <button
-                                    type="submit"
-                                    disabled={!inputText.trim() || isSendingLive}
-                                    className="w-11 h-11 rounded-full bg-[#FF5A0A] disabled:bg-gray-200 text-white flex items-center justify-center shrink-0 transition-colors cursor-pointer disabled:cursor-not-allowed"
-                                >
-                                    <Send className="w-4 h-4" />
-                                </button>
-                            </form>
+                                        }
+                                        className="flex-1 h-11 bg-[#F5F6F8] border border-gray-200 rounded-full px-4 text-[13px] text-[#26292E] focus:outline-none focus:border-[#FF5A0A]"
+                                    />
+                                    <button
+                                        type="submit"
+                                        disabled={!inputText.trim() || isSendingLive}
+                                        className="w-11 h-11 rounded-full bg-[#FF5A0A] disabled:bg-gray-200 text-white flex items-center justify-center shrink-0 transition-colors cursor-pointer disabled:cursor-not-allowed"
+                                    >
+                                        <Send className="w-4 h-4" />
+                                    </button>
+                                </form>
+                            </div>
                         )}
                     </motion.div>
                 </div>
