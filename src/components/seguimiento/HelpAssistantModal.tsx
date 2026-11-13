@@ -954,10 +954,10 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                         </button>
                                         <button
                                             type="button"
-                                            onClick={() => handleMenuVisitaTecnica('problema_tecnico', 'Problema con un técnico')}
+                                            onClick={() => handleMenuVisitaTecnica('problema_tecnico', 'Problema con el Técnico')}
                                             className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer group"
                                         >
-                                            <span>Problema con un técnico</span>
+                                            <span>Problema con el Técnico</span>
                                             <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
                                         </button>
                                         <button
