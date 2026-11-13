@@ -3,7 +3,7 @@ import express from 'express';
 import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import pool from '../db.ts';
-import { decodeOpaqueToken, createOpaqueToken } from '../opaqueToken.js';
+import { decodeOpaqueToken, createOpaqueToken } from '../opaqueToken.ts';
 import { replicateChange } from '../replicationService.ts';
 
 const router = Router();
@@ -1133,63 +1133,6 @@ router.post('/route', async (req, res) => {
   } catch (error: any) {
     console.error('Error calculando ruta:', error);
     res.status(500).json({ success: false, message: 'Error interno calculando ruta' });
-  }
-});
-
-
-const chatLogSchema = z.object({
-  token: z.string().min(1),
-  orden_id: z.union([z.string(), z.number()]).optional().nullable(),
-  codisegui: z.union([z.string(), z.number()]).optional().nullable(),
-  phone: z.string().optional().nullable(),
-  grupo_servicio: z.string().optional().nullable(),
-  motivo: z.string().optional().nullable(),
-  estado_chat: z.string().optional().default('En Curso'),
-  mensajes_json: z.array(z.any())
-});
-
-router.post('/chat-log', async (req, res) => {
-  const parsed = chatLogSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(400).json({ success: false, errors: parsed.error.format() });
-  }
-
-  const d = parsed.data;
-  const limaTime = getLimaDateTime();
-  const cleanPhone = d.phone ? String(d.phone).replace(/\D/g, '') : null;
-
-  try {
-    await pool.query(
-      `INSERT INTO logs_chat 
-        (token, orden_id, codisegui, phone, grupo_servicio, motivo, estado_chat, mensajes_json, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE
-        orden_id = COALESCE(VALUES(orden_id), orden_id),
-        codisegui = COALESCE(VALUES(codisegui), codisegui),
-        phone = COALESCE(VALUES(phone), phone),
-        grupo_servicio = COALESCE(VALUES(grupo_servicio), grupo_servicio),
-        motivo = COALESCE(VALUES(motivo), motivo),
-        estado_chat = VALUES(estado_chat),
-        mensajes_json = VALUES(mensajes_json),
-        updated_at = VALUES(updated_at)`,
-      [
-        d.token,
-        d.orden_id ? String(d.orden_id) : null,
-        d.codisegui ? String(d.codisegui) : null,
-        cleanPhone,
-        d.grupo_servicio || null,
-        d.motivo || null,
-        d.estado_chat,
-        JSON.stringify(d.mensajes_json),
-        limaTime,
-        limaTime
-      ]
-    );
-
-    return res.json({ success: true });
-  } catch (error) {
-    console.error('Error guardando en logs_chat:', error);
-    return res.status(500).json({ success: false });
   }
 });
 

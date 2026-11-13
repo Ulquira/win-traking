@@ -916,18 +916,18 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                     <div className="grid grid-cols-1 gap-2.5">
                                         <button
                                             type="button"
-                                            onClick={() => handleSelectArea('Visita Técnica', '1. Visita Técnica')}
+                                            onClick={() => handleSelectArea('Visita Técnica', 'Visita Técnica')}
                                             className="w-full bg-white hover:bg-[#FFF6ED] active:scale-[0.99] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3.5 text-left text-[13.5px] font-bold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all shadow-2xs cursor-pointer group"
                                         >
-                                            <span>1. Visita Técnica</span>
+                                            <span>Visita Técnica</span>
                                             <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
                                         </button>
                                         <button
                                             type="button"
-                                            onClick={() => handleSelectArea('Instalaciones', '2. Instalaciones')}
+                                            onClick={() => handleSelectArea('Instalaciones', 'Instalaciones')}
                                             className="w-full bg-white hover:bg-[#FFF6ED] active:scale-[0.99] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3.5 text-left text-[13.5px] font-bold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all shadow-2xs cursor-pointer group"
                                         >
-                                            <span>2. Instalaciones</span>
+                                            <span>Instalaciones</span>
                                             <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
                                         </button>
                                     </div>
@@ -938,42 +938,42 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                     <div className="grid grid-cols-1 gap-2">
                                         <button
                                             type="button"
-                                            onClick={() => handleMenuVisitaTecnica('ya_no_necesito', '1. Ya no necesito ayuda')}
+                                            onClick={() => handleMenuVisitaTecnica('ya_no_necesito', 'Ya no necesito ayuda')}
                                             className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer group"
                                         >
-                                            <span>1. Ya no necesito ayuda</span>
+                                            <span>Ya no necesito ayuda</span>
                                             <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
                                         </button>
                                         <button
                                             type="button"
-                                            onClick={() => handleMenuVisitaTecnica('direccion', '2. Dirección incorrecta')}
+                                            onClick={() => handleMenuVisitaTecnica('direccion', 'Dirección incorrecta')}
                                             className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer group"
                                         >
-                                            <span>2. Dirección incorrecta</span>
+                                            <span>Dirección incorrecta</span>
                                             <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
                                         </button>
                                         <button
                                             type="button"
-                                            onClick={() => handleMenuVisitaTecnica('problema_tecnico', '3. Problema con un técnico')}
+                                            onClick={() => handleMenuVisitaTecnica('problema_tecnico', 'Problema con un técnico')}
                                             className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer group"
                                         >
-                                            <span>3. Problema con un técnico</span>
+                                            <span>Problema con un técnico</span>
                                             <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
                                         </button>
                                         <button
                                             type="button"
-                                            onClick={() => handleMenuVisitaTecnica('asesor', '4. Hablar con un asesor')}
+                                            onClick={() => handleMenuVisitaTecnica('asesor', 'Hablar con un asesor')}
                                             className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer group"
                                         >
-                                            <span>4. Hablar con un asesor</span>
+                                            <span>Hablar con un asesor</span>
                                             <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
                                         </button>
                                         <button
                                             type="button"
-                                            onClick={() => handleMenuVisitaTecnica('consulta', '5. Realizar una consulta')}
+                                            onClick={() => handleMenuVisitaTecnica('consulta', 'Realizar una consulta')}
                                             className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer group"
                                         >
-                                            <span>5. Realizar una consulta</span>
+                                            <span>Realizar una consulta</span>
                                             <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
                                         </button>
                                     </div>
@@ -984,26 +984,26 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                     <div className="grid grid-cols-1 gap-2">
                                         <button
                                             type="button"
-                                            onClick={() => handleMenuInstalaciones('problema_tecnico', '1. Problema con un técnico')}
+                                            onClick={() => handleMenuInstalaciones('problema_tecnico', 'Problema con un técnico')}
                                             className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer group"
                                         >
-                                            <span>1. Problema con un técnico</span>
+                                            <span>Problema con un técnico</span>
                                             <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
                                         </button>
                                         <button
                                             type="button"
-                                            onClick={() => handleMenuInstalaciones('consulta', '2. Realizar una consulta')}
+                                            onClick={() => handleMenuInstalaciones('consulta', 'Realizar una consulta')}
                                             className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer group"
                                         >
-                                            <span>2. Realizar una consulta</span>
+                                            <span>Realizar una consulta</span>
                                             <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
                                         </button>
                                         <button
                                             type="button"
-                                            onClick={() => handleMenuInstalaciones('asesor', '3. Hablar con un asesor')}
+                                            onClick={() => handleMenuInstalaciones('asesor', 'Hablar con un asesor')}
                                             className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer group"
                                         >
-                                            <span>3. Hablar con un asesor</span>
+                                            <span>Hablar con un asesor</span>
                                             <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
                                         </button>
                                     </div>
@@ -1041,19 +1041,19 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                     <div className="flex flex-col gap-2">
                                         <button
                                             type="button"
-                                            onClick={() => handleVtDisponibilidad('no_desea', '1. No desea')}
+                                            onClick={() => handleVtDisponibilidad('no_desea', 'No desea')}
                                             className="w-full bg-white hover:bg-rose-50 border border-gray-200 hover:border-rose-300 rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-rose-600 transition-all cursor-pointer"
                                         >
-                                            1. No desea
+                                            No desea
                                         </button>
                                         <button
                                             type="button"
-                                            onClick={() => handleVtDisponibilidad('reprogramar', '2. Reprogramar')}
+                                            onClick={() => handleVtDisponibilidad('reprogramar', 'Reprogramar')}
                                             className="w-full bg-[#FF5A0A] hover:bg-[#E04E07] text-white rounded-xl px-4 py-3 text-left text-[13px] font-bold flex items-center justify-between transition-all shadow-sm cursor-pointer"
                                         >
                                             <span className="flex items-center gap-2">
                                                 <CalendarDays className="w-4 h-4" />
-                                                2. Reprogramar (Fecha y hora)
+                                                Reprogramar (Fecha y hora)
                                             </span>
                                             <ChevronRight className="w-4 h-4" />
                                         </button>
@@ -1115,24 +1115,24 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                     <div className="flex flex-col gap-2">
                                         <button
                                             type="button"
-                                            onClick={() => handleInitiateConsulta('telefono', '1. Número de teléfono registrado')}
+                                            onClick={() => handleInitiateConsulta('telefono', 'Número de teléfono registrado')}
                                             className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] transition-all cursor-pointer"
                                         >
-                                            1. Número de teléfono registrado
+                                            Número de teléfono registrado
                                         </button>
                                         <button
                                             type="button"
-                                            onClick={() => handleInitiateConsulta('titular', '2. Nombre del titular')}
+                                            onClick={() => handleInitiateConsulta('titular', 'Nombre del titular')}
                                             className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] transition-all cursor-pointer"
                                         >
-                                            2. Nombre del titular
+                                            Nombre del titular
                                         </button>
                                         <button
                                             type="button"
-                                            onClick={() => handleInitiateConsulta('direccion', '3. Dirección registrada')}
-                                            className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] transition-all cursor-pointer"
+                                            onClick={() => handleInitiateConsulta('direccion', 'Dirección registrada')}
+                                            className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer"
                                         >
-                                            3. Dirección registrada
+                                            Dirección registrada
                                         </button>
                                         <button
                                             type="button"
@@ -1140,15 +1140,15 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                                 handleInitiateConsulta(
                                                     'estado_datos',
                                                     area === 'Visita Técnica'
-                                                        ? '4. Estado u otros datos de la visita técnica'
-                                                        : '4. Estado u otros datos de la instalación'
+                                                        ? 'Estado u otros datos de la visita técnica'
+                                                        : 'Estado u otros datos de la instalación'
                                                 )
                                             }
                                             className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] transition-all cursor-pointer"
                                         >
                                             {area === 'Visita Técnica'
-                                                ? '4. Estado u otros datos de la visita técnica'
-                                                : '4. Estado u otros datos de la instalación'}
+                                                ? 'Estado u otros datos de la visita técnica'
+                                                : 'Estado u otros datos de la instalación'}
                                         </button>
                                     </div>
                                 )}
