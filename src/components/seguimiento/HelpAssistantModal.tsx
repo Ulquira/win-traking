@@ -45,7 +45,7 @@ type FlowStep =
     | 'vt_dir_step1_distrito'
     | 'vt_dir_step2_direccion'
     | 'vt_dir_step3_gps'
-    // Compartido: Problema con un técnico
+    // Compartido: Problema con el Técnico
     | 'mod_problema_tecnico'
     | 'mod_input_otro_problema'
     // Consulta BD (Instalaciones / Visita Técnica)
@@ -515,7 +515,7 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
     };
 
     // ==========================================================================
-    // MÓDULO COMPARTIDO: PROBLEMA CON UN TÉCNICO
+    // MÓDULO COMPARTIDO: Problema con el Técnico
     // ==========================================================================
     const handleSelectProblemaTecnico = (inconveniente: string, isOtro = false) => {
         const currentArea = area || 'Instalaciones';
@@ -691,7 +691,7 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
             return;
         }
 
-        // 1. Exclusivo Visita Técnica: "Ya no necesito ayuda -> Otro motivo"
+        // 1. Exclusivo Visita Técnica: "Ya no necesito la visita -> Otro motivo"
         if (step === 'vt_input_otro_motivo') {
             setInputText('');
             trackEvent('ayuda_vt_otro_motivo_guardado', {
@@ -738,7 +738,7 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
             return;
         }
 
-        // 5. Módulo Problema con un técnico -> Otro inconveniente
+        // 5. Módulo Problema con el Técnico -> Otro inconveniente
         if (step === 'mod_input_otro_problema') {
             setInputText('');
             const currentArea = area || 'Instalaciones';
@@ -941,7 +941,7 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                             onClick={() => handleMenuVisitaTecnica('ya_no_necesito', 'Ya no necesito la visita')}
                                             className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer group"
                                         >
-                                            <span>Ya no necesito ayuda</span>
+                                            <span>Ya no necesito la visita</span>
                                             <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
                                         </button>
                                         <button
@@ -954,18 +954,10 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                         </button>
                                         <button
                                             type="button"
-                                            onClick={() => handleMenuVisitaTecnica('problema_tecnico', 'Problema con el técnico')}
+                                            onClick={() => handleMenuVisitaTecnica('problema_tecnico', 'Problema con un técnico')}
                                             className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer group"
                                         >
                                             <span>Problema con un técnico</span>
-                                            <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={() => handleMenuVisitaTecnica('asesor', 'Hablar con un asesor')}
-                                            className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer group"
-                                        >
-                                            <span>Hablar con un asesor</span>
                                             <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
                                         </button>
                                         <button
@@ -976,6 +968,14 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                             <span>Verificar datos</span>
                                             <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
                                         </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleMenuVisitaTecnica('asesor', 'Hablar con un asesor')}
+                                            className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer group"
+                                        >
+                                            <span>Hablar con un asesor</span>
+                                            <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
+                                        </button>
                                     </div>
                                 )}
 
@@ -984,10 +984,10 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                     <div className="grid grid-cols-1 gap-2">
                                         <button
                                             type="button"
-                                            onClick={() => handleMenuInstalaciones('problema_tecnico', 'Problema con un técnico')}
+                                            onClick={() => handleMenuInstalaciones('problema_tecnico', 'Problema con el Técnico')}
                                             className="w-full bg-white hover:bg-[#FFF6ED] border border-gray-200 hover:border-[#FF5A0A] rounded-xl px-4 py-3 text-left text-[13px] font-semibold text-[#26292E] hover:text-[#FF5A0A] flex items-center justify-between transition-all cursor-pointer group"
                                         >
-                                            <span>Problema con un técnico</span>
+                                            <span>Problema con el Técnico</span>
                                             <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-[#FF5A0A]" />
                                         </button>
                                         <button
@@ -1009,7 +1009,7 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                     </div>
                                 )}
 
-                                {/* FLUJO VISITA TÉCNICA: YA NO NECESITO AYUDA */}
+                                {/* FLUJO VISITA TÉCNICA: Ya no necesito la visita */}
                                 {step === 'vt_ya_no_necesito' && (
                                     <div className="flex flex-col gap-2">
                                         <button
@@ -1083,7 +1083,7 @@ export const HelpAssistantModal: React.FC<HelpAssistantModalProps> = ({
                                     </div>
                                 )}
 
-                                {/* MÓDULO COMPARTIDO: PROBLEMA CON UN TÉCNICO */}
+                                {/* MÓDULO COMPARTIDO: Problema con el Técnico */}
                                 {step === 'mod_problema_tecnico' && (
                                     <div className="flex flex-col gap-2">
                                         {[
